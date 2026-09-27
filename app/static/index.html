@@ -1,0 +1,201 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>CaseForge · 智能用例工坊</title>
+  <link rel="stylesheet" href="/static/styles.css?v=agentic1">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <span class="brand-mark">CF</span>
+      <div><strong>CaseForge</strong><span>智能用例工坊</span></div>
+    </div>
+    <div class="top-actions">
+      <span id="model-status" class="status-pill">检查模型…</span>
+      <button class="button ghost" id="benchmark-toggle" type="button">公开评测</button>
+      <button class="button ghost" id="trace-toggle" type="button">链路追踪</button>
+      <button class="button ghost" id="knowledge-toggle" type="button">知识与记忆</button>
+    </div>
+  </header>
+
+  <main class="workspace">
+    <aside class="project-rail">
+      <div class="rail-heading">
+        <span>任务</span>
+        <button class="icon-button" id="new-project" type="button" title="新建任务">＋</button>
+      </div>
+      <div id="project-list" class="project-list"></div>
+    </aside>
+
+    <section class="main-stage">
+      <nav class="pipeline" aria-label="生成流程">
+        <button class="pipeline-step active" data-phase="draft"><b>01</b><span>需求输入</span></button>
+        <button class="pipeline-step" data-phase="analyzed"><b>02</b><span>需求理解</span></button>
+        <button class="pipeline-step" data-phase="modules_planned"><b>03</b><span>模块确认</span></button>
+        <button class="pipeline-step" data-phase="cases_generated"><b>04</b><span>用例生成</span></button>
+        <button class="pipeline-step" data-phase="reviewed"><b>05</b><span>独立评审</span></button>
+      </nav>
+
+      <div id="notice" class="notice" hidden></div>
+
+      <section id="supervisor-panel" class="supervisor-panel" aria-label="Agentic 调度" hidden>
+        <div class="supervisor-heading"><div><span class="eyebrow">AGENTIC HARNESS</span><h2>动态选择与反馈重规划</h2></div><span id="supervisor-status" role="status">尚未运行</span></div>
+        <p>Supervisor 根据物料、现有产物和评审反馈逐步选择 Agent 与 Skill。模块确认后可继续同一次运行。</p>
+        <label>本次目标<textarea id="supervisor-goal" rows="2" maxlength="4000">生成满足需求的测试用例，并根据评审反馈修复</textarea></label>
+        <div class="supervisor-controls">
+          <label>决策步数上限<input id="supervisor-budget" type="number" min="1" max="20" value="12"></label>
+          <button id="supervisor-start" class="button primary" type="button">启动 Agentic 生成</button>
+          <label>运行记录<select id="supervisor-history"><option value="">暂无记录</option></select></label>
+        </div>
+        <div id="supervisor-pause" hidden>
+          <p id="supervisor-question"></p>
+          <label>补充说明<textarea id="supervisor-answer" rows="2" maxlength="4000" placeholder="填写业务补充；模块确认请在下方模块工作区完成"></textarea></label>
+          <label>追加决策步数（0–20，本次运行累计最多100步）<input id="supervisor-additional-steps" type="number" min="0" max="20" value="0"></label>
+          <button id="supervisor-continue" class="button secondary" type="button">继续本次运行</button>
+        </div>
+        <div id="supervisor-log" class="supervisor-log" aria-live="polite"></div>
+      </section>
+
+      <section id="draft-view" class="view active">
+        <div class="section-intro">
+          <span class="eyebrow">INPUT</span>
+          <h1>先把需求说清楚。</h1>
+          <p>需求理解 Agent 会拆出原子需求、规则、风险与待确认项，所有后续产物都必须引用这些证据。</p>
+        </div>
+        <form id="project-form" class="requirement-form">
+          <label>需求名称<input id="project-title" required value="设备借用演示"></label>
+          <label>补充上下文<input id="project-context" value="演示 工单系统，虚构设备借用审批"></label>
+          <label class="full">需求正文<textarea id="project-requirement" required rows="15">虚构设备借用系统提供 EQUIPMENT_BORROW 工单。
+登录用户调用 CreateBorrowRequest 提交 equipment_id、borrow_days、request_id，借用天数为1到7天；相同 request_id 返回同一 borrow_id。
+GetBorrowRequest 返回申请详情与当前可借库存，库存查询失败时提示重试。
+CheckEquipmentAvailability 只查询库存，不改变申请状态；UpdateBorrowNote 只允许申请人在 DRAFT 状态编辑借用备注。
+申请从 DRAFT 提交到 SUBMITTED，由 Librarian 审批到 READY 或 DECLINED；申请人不能审批自己的申请。
+终态通过 demo.equipment.events 通知，payload.borrow_id 关联申请，重复事件不能重复处理。
+演示需覆盖权限、审计、超时恢复和灰度兼容。所有名称和规则仅用于本仓库合成测试。</textarea></label>
+          <label class="full">需求文档<input id="project-document" type="file" accept=".pdf,.docx,.md,.markdown,.txt"><span id="document-status">支持 PDF、DOCX、Markdown、TXT</span></label>
+          <div class="form-footer">
+            <span>支持 PRD、验收标准、接口约束的纯文本组合输入</span>
+            <button class="button primary" type="submit">创建并解析需求</button>
+            <button class="button secondary" type="submit" value="agentic">创建并交给 Agentic</button>
+          </div>
+        </form>
+      </section>
+
+      <section id="analysis-view" class="view"></section>
+      <section id="modules-view" class="view"></section>
+      <section id="cases-view" class="view"></section>
+      <section id="review-view" class="view"></section>
+    </section>
+
+    <aside id="context-panel" class="context-panel" aria-label="知识与记忆">
+      <div class="panel-heading"><div><span class="eyebrow">CONTEXT</span><h2>知识与记忆</h2></div><button class="icon-button" id="context-close" title="关闭">×</button></div>
+      <div class="panel-section">
+        <h3>添加知识</h3>
+        <form id="knowledge-form">
+          <label>标题<input id="knowledge-title" required placeholder="优惠券业务规则"></label>
+          <label>知识类型<select id="knowledge-type"><option value="business_rule">业务规则</option><option value="case_example">历史用例</option><option value="defect">缺陷复盘</option><option value="test_standard">测试规范</option></select></label>
+          <label>工单作用域<select id="knowledge-ticket-type"><option value="COMMON">所有工单（COMMON）</option><option value="EQUIPMENT_BORROW">设备借用</option><option value="P2P">P2P</option><option value="RISK_CONTROL">风控</option><option value="GENERAL_TICKET">通用工单</option></select></label>
+          <label>内容<textarea id="knowledge-content" required rows="6" placeholder="输入会被检索并作为生成证据的知识…"></textarea></label>
+          <button class="button secondary" type="submit">写入知识库</button>
+        </form>
+        <div class="chunk-toolbar">
+          <span id="chunk-summary">0 active chunks</span>
+          <button class="button ghost" id="merge-chunks" type="button" disabled>合并选中块</button>
+        </div>
+        <div id="chunk-editor" class="chunk-editor" hidden></div>
+        <div id="knowledge-list" class="compact-list"></div>
+      </div>
+      <div class="panel-section">
+        <h3>文档知识入库</h3>
+        <form id="knowledge-upload-form">
+          <label>知识文档<input id="knowledge-file" type="file" required accept=".pdf,.docx,.md,.markdown,.txt"></label>
+          <label>工单作用域<select id="knowledge-file-ticket-type"><option value="EQUIPMENT_BORROW">设备借用</option><option value="P2P">P2P</option><option value="RISK_CONTROL">风控</option><option value="GENERAL_TICKET">通用工单</option><option value="COMMON">所有工单（COMMON）</option></select></label>
+          <label>版本<input id="knowledge-file-version" value="1.0" required></label>
+          <button class="button secondary" type="submit">解析并写入知识库</button>
+        </form>
+        <div id="knowledge-upload-status" class="compact-list"></div>
+      </div>
+      <div class="panel-section">
+        <h3>RAG 检索调试</h3>
+        <form id="rag-search-form">
+          <label>查询<input id="rag-query" required value="设备借用 Check Edit 修改借用备注失败展示 error.message"></label>
+          <label>评测数据集<select id="rag-dataset"><option value="EQUIPMENT-RAG-V1">EQUIPMENT-RAG-V1</option></select></label>
+          <div class="rag-actions">
+            <button class="button secondary" type="submit">运行检索</button>
+            <button class="button ghost" id="rag-evaluate" type="button">评测黄金集</button>
+          </div>
+          <button class="button ghost" id="ebt-import" type="button">导入 EBT 公共评测集</button>
+        </form>
+        <div id="rag-result" class="compact-list"></div>
+      </div>      <div class="panel-section">
+        <h3>场景模板学习</h3>
+        <form id="template-form">
+          <label>工单作用域<select id="template-ticket-type"><option value="COMMON">所有工单（COMMON）</option><option value="EQUIPMENT_BORROW">设备借用</option><option value="P2P">P2P</option><option value="RISK_CONTROL">风控</option><option value="GENERAL_TICKET">通用工单</option></select></label>
+          <label>测试计划<textarea id="template-content" required rows="5" placeholder="粘贴测试计划中的明确规则与检查点"></textarea></label>
+          <button class="button secondary" type="submit">提炼场景模板</button>
+        </form>
+        <div id="template-list" class="compact-list"></div>
+      </div>
+      <div class="panel-section">
+        <h3>Adaptive Memory</h3>
+        <form id="memory-form">
+          <label>工单作用域<select id="memory-ticket-type"><option value="COMMON">所有工单（COMMON）</option><option value="EQUIPMENT_BORROW">设备借用</option><option value="P2P">P2P</option><option value="RISK_CONTROL">风控</option><option value="GENERAL_TICKET">通用工单</option></select></label>
+          <label>规则<input id="memory-rule" required placeholder="例如：支付模块必须覆盖幂等性"></label>
+          <button class="button secondary" type="submit">添加团队规则</button>
+        </form>
+        <form id="memory-search-form">
+          <label>检索问题<input id="memory-query" required value="重复提交和异步通知需要覆盖哪些风险"></label>
+          <label>目标 Agent<select id="memory-agent"><option value="">全部 Agent</option><option value="requirement_understanding">需求理解</option><option value="module_planning">模块生成</option><option value="case_generation">用例生成</option><option value="quality_critic">质量评审</option></select></label>
+          <button class="button ghost" type="submit">检索 Memory</button>
+        </form>
+        <div id="memory-stats" class="compact-list"></div>
+        <div id="memory-result" class="compact-list"></div>
+        <div id="memory-list" class="compact-list"></div>
+      </div>
+    </aside>
+
+    <aside id="trace-panel" class="context-panel" aria-label="链路追踪">
+      <div class="panel-heading"><div><span class="eyebrow">OBSERVABILITY</span><h2>全链路追踪</h2></div><button class="icon-button" id="trace-close" title="关闭">×</button></div>
+      <div id="trace-empty" class="trace-empty">选择一个任务后查看 Agent、LLM、RAG、Memory 与存储调用链。</div>
+      <div id="trace-summary" class="compact-list"></div>
+      <div id="trace-list" class="trace-list"></div>
+      <div id="trace-detail" class="trace-detail"></div>
+    </aside>
+
+    <aside id="benchmark-panel" class="context-panel benchmark-panel" aria-label="公开评测">
+      <div class="panel-heading"><div><span class="eyebrow">PUBLIC EVALUATION</span><h2>公开 Benchmark</h2></div><button class="icon-button" id="benchmark-close" title="关闭">×</button></div>
+      <p class="benchmark-lead">用公开数据分别检验需求理解、模块规划、用例生成与质量评审。每次运行使用隔离工作区，不污染业务知识和 Memory。</p>
+      <div class="panel-section">
+        <div class="benchmark-section-heading"><h3>数据集</h3><span id="benchmark-ready-count">检查中</span></div>
+        <div id="benchmark-datasets" class="benchmark-datasets"></div>
+      </div>
+      <div class="panel-section">
+        <h3>运行评测</h3>
+        <form id="benchmark-form">
+          <label>评测任务<select id="benchmark-suite"></select></label>
+          <div class="benchmark-form-row">
+            <label>数据划分<select id="benchmark-split"><option value="test">测试集</option><option value="validation">验证集</option><option value="development">开发集</option><option value="all">全部</option></select></label>
+            <label>样本数<input id="benchmark-limit" type="number" min="1" max="20" value="3"></label>
+          </div>
+          <label>运行模式<select id="benchmark-mode"><option value="offline">离线模式（不调用模型）</option><option value="live">真实模型（消耗 Token）</option></select></label>
+          <button class="button primary" id="benchmark-run" type="submit">运行 Benchmark</button>
+        </form>
+        <div id="benchmark-result" class="benchmark-result"></div>
+      </div>
+      <div class="panel-section">
+        <div class="benchmark-section-heading"><h3>历史报告</h3><span>本地 JSON</span></div>
+        <div id="benchmark-reports" class="benchmark-reports"></div>
+      </div>
+    </aside>
+  </main>
+
+  <div id="busy" class="busy" hidden><span></span><p>Agent 正在工作…</p></div>
+  <script src="/static/app.js?v=agentic1"></script>
+  <script src="/static/module-workspace.js?v=module4"></script>
+  <script src="/static/case-workspace.js?v=case1"></script>
+  <script src="/static/chunk-manager.js?v=chunk5"></script>
+  <script src="/static/supervisor.js?v=1"></script>
+</body>
+</html>

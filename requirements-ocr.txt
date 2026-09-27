@@ -1,0 +1,8 @@
+# Optional dependencies for scanned/image PDF OCR.
+# Native-text PDF, DOCX, Markdown, and TXT parsing do not require these packages.
+PyMuPDF>=1.19,<1.23; python_version < "3.8"
+PyMuPDF>=1.23,<2; python_version >= "3.8"
+paddlepaddle>=2.5,<2.7; python_version < "3.8"
+paddlepaddle>=2.6,<3; python_version >= "3.8"
+paddleocr>=2.6,<2.8; python_version < "3.8"
+paddleocr>=2.7,<3; python_version >= "3.8"
