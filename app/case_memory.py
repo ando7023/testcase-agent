@@ -131,4 +131,6 @@ class CaseConversationMemory:
             "targeted": "指定模块生成",
             "chat": "对话式修改",
             "restore": "版本恢复",
+            "human_edit": "人工修改",
+            "human_review": "人工验收快照",
         }.get(mode, mode)

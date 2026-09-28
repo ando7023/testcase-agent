@@ -17,6 +17,7 @@ from .core_agents import (
 )
 from .chunk_management import KnowledgeChunkManager
 from .case_memory import CaseConversationMemory
+from .feedback import case_fingerprint, example_document
 from .document_parser import DocumentParsingAgent
 from .domain_registry import detect_ticket_type, get_domain_facts
 from .domain_equipment import build_equipment_knowledge
@@ -112,6 +113,10 @@ class TestCaseOrchestrator:
         )
         self.mindmap_tool = MindMapConversionTool()
         self.xmind_exporter = XMindExportAdapter()
+        # Conservative legacy migration: only snapshot-proven decisions create examples.
+        # Project/run files are not rewritten on startup.
+        for project in self.store.list_projects():
+            self.store.sync_case_examples(project)
 
     def _build_tool_registry(self) -> ToolRegistry:
         registry = ToolRegistry(self.tracer)
@@ -335,11 +340,11 @@ class TestCaseOrchestrator:
         self, document_ids: List[str], title: str = ""
     ) -> Dict[str, Any]:
         return self.chunk_manager.merge(document_ids, title)
-    def search_knowledge(self, query: str) -> Dict[str, Any]:
-        context = self._retrieve(query)
+    def search_knowledge(self, query: str, project_id: str = "") -> Dict[str, Any]:
+        context = self._retrieve(query, project_id=project_id)
         return context.model_dump()
 
-    def _retrieve(self, query: str) -> KnowledgeContext:
+    def _retrieve(self, query: str, project_id: str = "") -> KnowledgeContext:
         with self.tracer.span(
             "rag.retrieve",
             kind="rag",
@@ -347,7 +352,7 @@ class TestCaseOrchestrator:
             input_value=query,
         ) as span:
             context = self.retrieval_agent.run(
-                query, {"documents": self.store.list_knowledge()}
+                query, {"documents": self.store.project_knowledge(project_id), "project_id": project_id}
             )
             if span:
                 span.output_summary = "{} hits from {} candidates".format(
@@ -535,7 +540,7 @@ class TestCaseOrchestrator:
             return report
 
     def analyze(self, project: ProjectState, instruction: str = "", supervisor_evidence: str = "") -> ProjectState:
-        knowledge_context = self._retrieve(project.requirement)
+        knowledge_context = self._retrieve(project.requirement, project_id=project.id)
         context = self._context(
             project.requirement,
             knowledge_context,
@@ -1223,12 +1228,24 @@ class TestCaseOrchestrator:
         case = next((item for item in project.cases if item.id == case_id), None)
         if not case:
             raise PipelineError("Case {} not found".format(case_id))
+        original_fingerprint = case_fingerprint(case)
         if action == "edited" and edited_case:
             merged = case.model_dump()
             merged.update({key: value for key, value in edited_case.items() if key in EDITABLE_CASE_FIELDS})
             revised = TestCase.model_validate(merged)
             project.cases = [revised if item.id == case_id else item for item in project.cases]
             case = revised
+        if case_fingerprint(case) != original_fingerprint:
+            project.review = None
+            project.evaluation = None
+            project.phase = "cases_generated"
+            for item in project.cases:
+                item.review_status = "pending"
+            self.case_memory.remember_result(project, project.cases, "human_edit", reason)
+        latest = project.case_versions[-1] if project.case_versions else None
+        version_case = next((item for item in latest.cases if item.id == case.id), None) if latest else None
+        if version_case is None or case_fingerprint(version_case) != case_fingerprint(case):
+            self.case_memory.remember_result(project, project.cases, "human_review", "人工反馈时的正文快照")
         case.human_status = action
 
         ticket_type = (
@@ -1238,11 +1255,12 @@ class TestCaseOrchestrator:
         )
         category = classify_badcase(reason) if action in {"edited", "rejected"} else ""
         project.feedback.append(
-            CaseFeedback(case_id=case_id, action=action, reason=reason, category=category)
+            CaseFeedback(case_id=case_id, action=action, reason=reason, category=category,
+                         case_fingerprint=case_fingerprint(case),
+                         case_version_id=project.case_versions[-1].id if project.case_versions else "")
         )
 
-        if action in {"adopted", "edited"}:
-            self.store.upsert_knowledge([self._example_document(project, case, ticket_type)])
+        # save_project synchronizes active examples with this exact body/decision.
         if action in {"edited", "rejected"}:
             self.store.add_badcase({
                 "project_id": project.id,
@@ -1340,19 +1358,7 @@ class TestCaseOrchestrator:
 
     @staticmethod
     def _example_document(project: ProjectState, case: TestCase, ticket_type: str) -> Dict[str, Any]:
-        steps_text = "\n".join(
-            "{}. {} => 预期：{}".format(index, step.action, step.expected)
-            for index, step in enumerate(case.steps, 1)
-        )
-        return {
-            "id": "EX-{}-{}".format(project.id, case.id),
-            "title": "[已采纳示例][{}] {}".format(case.case_type, case.title),
-            "content": "前置条件：{}\n{}".format("；".join(case.preconditions), steps_text),
-            "doc_type": "case_example",
-            "tags": [ticket_type, case.case_type, case.module_id],
-            "source": "human_feedback",
-            "metadata": {"domain": "ticket", "ticket_type": ticket_type} if ticket_type != "COMMON" else {},
-        }
+        return example_document(project, case, ticket_type)
 
     def _context(
         self,
@@ -1365,7 +1371,7 @@ class TestCaseOrchestrator:
         run_id: str = "",
     ) -> Dict[str, Any]:
         if knowledge_context is None:
-            knowledge_context = self._retrieve(query)
+            knowledge_context = self._retrieve(query, project_id=project_id)
         else:
             knowledge_context = KnowledgeContext.model_validate(knowledge_context)
 

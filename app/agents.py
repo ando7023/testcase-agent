@@ -197,6 +197,11 @@ class KnowledgeRetrievalAgent(Agent):
         ) else "general"
         expanded_terms = definition.retrieval_terms if domain == "ticket" else []
         documents = list(all_documents)
+        # Scope is supplied by the caller, never inferred from the model's query.
+        project_id = context.get("project_id", "")
+        documents = [d for d in documents if d.doc_type != "case_example" or
+                     (project_id and d.metadata.get("scope") == "project" and
+                      d.metadata.get("project_id") == project_id)]
         filters: Dict[str, Any] = {"status": "active"}
         if domain == "ticket":
             allowed_ticket_types = {definition.key, "COMMON"}

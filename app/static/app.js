@@ -160,6 +160,7 @@ function renderCases() {
   const cases = state.project.cases || [];
   if (!cases.length) return;
   $('#cases-view').innerHTML = `
+    ${humanAcceptanceBanner()}
     <div class="section-intro"><span class="eyebrow">CASE GENERATION AGENT</span><h1>${cases.length} 条可追溯工单用例已生成。</h1><p>每条用例都保留需求 ID、RAG 证据、风险标签和可观察的预期结果。逐条采纳 / 修改 / 拒绝会沉淀为 few-shot 示例与 badcase 知识。</p></div>
     <div class="section-actions"><span>使用独立评审 Agent 检查接口、状态、权限、消息与灰度覆盖。</span><div><a class="button ghost" href="/api/projects/${state.project.id}/export/csv">导出 CSV</a><button class="button primary" id="review-cases">运行独立评审</button></div></div>
     <div class="mindmap-actions">
@@ -176,6 +177,11 @@ function renderCases() {
 }
 
 const HUMAN_STATUS_TEXT = {pending: '待评判', adopted: '已采纳', edited: '已修改', rejected: '已拒绝'};
+function humanAcceptanceBanner() {
+  const acceptance = state.project?.human_acceptance;
+  if (!acceptance) return '';
+  return `<div class="section-block"><h3>人工验收 · ${acceptance.status === 'accepted' ? '已全部验收' : '尚未全部验收'}</h3><p>当前正文：${acceptance.accepted}/${acceptance.total} 条已采纳，${acceptance.pending} 条待验收，${acceptance.rejected} 条已拒绝。正文修改后需重新验收；采纳不代表接口执行通过。</p></div>`;
+}
 const FIXABLE_CATEGORIES = ['case_type', 'module_coverage', 'assertion', 'requirement_coverage'];
 
 function caseTable(cases) {
@@ -246,11 +252,15 @@ function openCaseEditor(scope, caseId) {
 
 function renderReview() {
   const review = state.project.review;
-  if (!review) return;
+  if (!review) {
+    $('#review-view').innerHTML = `${humanAcceptanceBanner()}<div class="section-block"><p>当前用例尚无有效评审。请在用例工作区运行独立评审。</p></div>`;
+    return;
+  }
   const canRepair = item => [...FIXABLE_CATEGORIES, 'semantic'].includes(item.category) && !['suggestion', 'clarification'].includes(item.disposition);
   const findingLabel = item => item.disposition === 'clarification' ? '待澄清（阻塞）' : item.disposition === 'suggestion' && !['high', 'critical', 'error'].includes(item.severity) ? '建议（不阻塞）' : canRepair(item) ? '缺陷 · 可自动修复' : '待核验';
   const fixable = review.findings.filter(canRepair);
   $('#review-view').innerHTML = `
+    ${humanAcceptanceBanner()}
     <div class="section-intro"><span class="eyebrow">REVIEW AGENT · CRITIQUE LOOP</span><h1>评审必须是可测量的，且必须被消费。</h1><p>评分来自需求、模块、领域类型、步骤断言和 RAG 证据的结构化检查；可修复的发现可以自动回流到生成 Agent。</p></div>
     <div class="score-layout">
       <div class="score-box"><strong>${review.score}</strong><span>质量评分 / 100</span>${review.added_case_ids?.length ? `<small class="revision-mark">修复补充 ${review.added_case_ids.length} 条</small>` : ''}</div>

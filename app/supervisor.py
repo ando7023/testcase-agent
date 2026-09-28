@@ -72,7 +72,7 @@ def artifact_fingerprint(project):
         "documents": [item.model_dump() for item in project.source_documents],
         "analysis": project.analysis.model_dump() if project.analysis else None,
         "module_tree": project.module_tree.model_dump() if project.module_tree else None,
-        "cases": [case.model_dump(exclude={"review_status"}) for case in project.cases],
+        "cases": [case.model_dump(exclude={"review_status", "human_status"}) for case in project.cases],
     }
     return hashlib.sha256(json.dumps(data, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
 
@@ -254,7 +254,7 @@ class AgenticSupervisor:
                                     "warnings": d.warnings, "excerpt": d.normalized_text[:5000],
                                     "extraction": d.extraction_summary} for d in project.source_documents[:6]]}
         if name == "search_knowledge":
-            result = self.worker.search_knowledge(project.requirement[:2000] + "\n" + decision.instruction)
+            result = self.worker.search_knowledge(project.requirement[:2000] + "\n" + decision.instruction, project_id=project.id)
             return {"evidence": json.dumps(result, ensure_ascii=False)[:8000]}
         instruction = "\n".join([run.goal] + run.responses + [decision.instruction])
         if name == "requirement_understanding":

@@ -10,7 +10,8 @@
     $('#supervisor-question').textContent = run?.question || '';
     $('#supervisor-continue').disabled = Boolean(run?.status === 'waiting_confirmation' && !state.project?.module_tree?.confirmed);
     $('#supervisor-log').innerHTML = (run?.error ? `<p class="supervisor-error">${escapeHtml(run.error)}</p>` : '') +
-      (run?.degraded ? '<p>部分 Worker 使用了本地演示或回退结果，请核验产物。</p>' : '') +
+      (state.project?.human_acceptance ? `<p>当前用例人工验收：${state.project.human_acceptance.status === 'accepted' ? '已全部验收' : '尚未全部验收'} · ${state.project.human_acceptance.accepted}/${state.project.human_acceptance.total} 条已采纳。验收针对用例设计，不代表接口执行通过。</p>` : '') +
+      (run?.degraded ? '<p>本次运行历史包含本地演示或回退结果；历史状态保留，当前用例的人工验收结果单独显示。</p>' : '') +
       (Object.keys(run?.issue_ledger || {}).length ? `<details><summary>问题跟踪 · 已尝试修复 ${run.repair_rounds || 0}/2 轮</summary>${Object.entries(run.issue_ledger).map(([id, item]) => `<p>${escapeHtml(id)} · ${item.status === 'not_observed' ? '本轮未出现（尚非关闭证明）' : '本轮仍有发现'} · ${escapeHtml(item.finding?.case_id || '')} · ${escapeHtml(item.finding?.message || '')}${item.reopened ? ' · 再次出现' : ''}${item.classification_changed ? ' · 分类有变化，需核对依据' : ''}</p>`).join('')}</details>` : '') +
       (run?.steps || []).map(step => {
         const d = step.decision, o = step.observation || {};

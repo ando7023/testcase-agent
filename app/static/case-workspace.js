@@ -44,6 +44,7 @@ function renderCases() {
   const cases = state.project.cases || [];
   if (!cases.length) return;
   $('#cases-view').innerHTML = `
+    ${humanAcceptanceBanner()}
     <div class="section-intro"><span class="eyebrow">CASE AGENT · CONVERSATION MEMORY · VERSIONED OUTPUT</span><h1>生成、补充，再通过对话打磨用例。</h1><p>支持全量、重生成、继续生成和指定模块生成；每轮会话保存短期 Memory 与完整用例快照，修改后独立评审结果自动失效。</p></div>
     <div class="module-modebar case-modebar">
       <div class="module-mode-actions">

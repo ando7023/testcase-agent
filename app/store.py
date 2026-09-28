@@ -95,6 +95,8 @@ class JsonStore:
         return project
 
     def save_project(self, project: ProjectState) -> None:
+        from .feedback import reconcile_feedback
+        reconcile_feedback(project)
         project.updated_at = utc_now_iso()
         span_context = (
             self.tracer.span(
@@ -111,6 +113,7 @@ class JsonStore:
                     self.projects_dir / (project.id + ".json"),
                     project.model_dump(),
                 )
+                self.sync_case_examples(project)
             if span:
                 span.output_summary = "project persisted"
 
@@ -128,11 +131,60 @@ class JsonStore:
         path = self.projects_dir / (project_id + ".json")
         if not path.exists():
             return None
-        return ProjectState.model_validate(self._read_json(path, {}))
+        from .feedback import reconcile_feedback
+        project = ProjectState.model_validate(self._read_json(path, {}))
+        reconcile_feedback(project)
+        return project
 
     def list_projects(self) -> List[ProjectState]:
-        projects = [ProjectState.model_validate(self._read_json(path, {})) for path in self.projects_dir.glob("*.json")]
+        projects = [self.get_project(path.stem) for path in self.projects_dir.glob("*.json")]
         return sorted(projects, key=lambda item: item.updated_at, reverse=True)
+
+    def sync_case_examples(self, project):
+        """Keep historical examples but index only the currently accepted body."""
+        from .feedback import current_feedback, example_document
+        ticket_type = project.analysis.ticket_types[0] if project.analysis and project.analysis.ticket_types else "COMMON"
+        active = {}
+        for case in project.cases:
+            record = current_feedback(project, case)
+            if record and record.action in {"adopted", "edited"}:
+                payload = example_document(project, case, ticket_type)
+                active[payload["id"]] = payload
+        mutations, invalidated = [], []
+        for document in self.list_knowledge():
+            if document.doc_type != "case_example":
+                continue
+            owned = document.metadata.get("project_id") == project.id or document.id.startswith("EX-{}-".format(project.id))
+            if not owned or document.id in active or document.status != "active":
+                continue
+            document.status = "inactive"
+            document.metadata = dict(document.metadata, project_id=project.id, scope="project",
+                                     invalidation_reason="feedback_withdrawn_or_body_superseded")
+            mutations.append(document.model_dump())
+            invalidated.append(document.id)
+        mutations.extend(active.values())
+        if mutations:
+            self.apply_knowledge_mutation(mutations, invalidated)
+
+    def project_knowledge(self, project_id=""):
+        """Unknown/global scopes never receive human case examples."""
+        from .feedback import current_feedback, case_fingerprint, example_content
+        project = self.get_project(project_id) if project_id else None
+        cases = {case.id: case for case in project.cases} if project else {}
+        documents = []
+        for document in self.list_knowledge():
+            if document.doc_type == "case_example":
+                metadata = document.metadata
+                case = cases.get(metadata.get("case_id"))
+                if not case or metadata.get("scope") != "project" or metadata.get("project_id") != project_id:
+                    continue
+                record = current_feedback(project, case)
+                if not record or record.action not in {"adopted", "edited"} or metadata.get("case_fingerprint") != case_fingerprint(case):
+                    continue
+                if document.content != example_content(case):
+                    continue
+            documents.append(document)
+        return documents
 
     def list_knowledge(self) -> List[KnowledgeDocument]:
         payload = self._read_json(self.knowledge_file, [])

@@ -2,7 +2,7 @@ from datetime import datetime
 from typing import Any, Dict, List, Optional
 from typing_extensions import Literal
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, computed_field
 
 
 def utc_now_iso() -> str:
@@ -345,6 +345,8 @@ class CaseFeedback(BaseModel):
     action: str  # adopted | edited | rejected
     reason: str = ""
     category: str = ""  # coverage | quality | maintenance
+    case_fingerprint: str = ""
+    case_version_id: str = ""
     created_at: str = Field(default_factory=utc_now_iso)
 
 
@@ -482,6 +484,12 @@ class ProjectState(BaseModel):
     trace_run_ids: List[str] = Field(default_factory=list)
     created_at: str = Field(default_factory=utc_now_iso)
     updated_at: str = Field(default_factory=utc_now_iso)
+
+    @computed_field
+    @property
+    def human_acceptance(self) -> Dict[str, Any]:
+        from .feedback import acceptance_summary
+        return acceptance_summary(self)
 
 
 class KnowledgeDocument(BaseModel):
