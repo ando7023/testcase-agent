@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>CaseForge · 智能用例工坊</title>
-  <link rel="stylesheet" href="/static/styles.css?v=agentic1">
+  <link rel="stylesheet" href="/static/styles.css?v=memory-versions1">
 </head>
 <body>
   <header class="topbar">
@@ -17,6 +17,7 @@
       <button class="button ghost" id="benchmark-toggle" type="button">公开评测</button>
       <button class="button ghost" id="trace-toggle" type="button">链路追踪</button>
       <button class="button ghost" id="knowledge-toggle" type="button">知识与记忆</button>
+      <button class="button ghost" id="memory-versions-open" type="button">Memory 版本</button>
     </div>
   </header>
 
@@ -152,6 +153,7 @@ CheckEquipmentAvailability 只查询库存，不改变申请状态；UpdateBorro
         </form>
         <div id="memory-stats" class="compact-list"></div>
         <div id="memory-result" class="compact-list"></div>
+        <label><input id="memory-show-history" type="checkbox"> 显示历史及停用事实</label>
         <div id="memory-list" class="compact-list"></div>
       </div>
     </aside>
@@ -192,10 +194,29 @@ CheckEquipmentAvailability 只查询库存，不改变申请状态；UpdateBorro
   </main>
 
   <div id="busy" class="busy" hidden><span></span><p>Agent 正在工作…</p></div>
-  <script src="/static/app.js?v=feedback2"></script>
+  <dialog id="memory-versions-dialog" aria-labelledby="memory-versions-title">
+    <div class="panel-heading"><h2 id="memory-versions-title">Memory 版本</h2><button class="button ghost" id="memory-versions-close" type="button">关闭</button></div>
+    <p id="memory-versions-scope"></p>
+    <div class="memory-version-controls">
+      <label>类型<select id="memory-version-kind"><option value="snapshot">项目整体快照</option><option value="modules">模块与决策记忆</option><option value="cases">用例与决策记忆</option><option value="fact" disabled>长期事实</option></select></label>
+      <label>旧版本<select id="memory-version-left"></select></label>
+      <label>新版本<select id="memory-version-right"></select></label>
+      <button class="button secondary" id="memory-version-compare" type="button">对比差异</button>
+    </div>
+    <div id="memory-version-save-row" class="memory-version-controls">
+      <label>快照说明<input id="memory-version-label" maxlength="160" placeholder="例如：模块确认后的基线"></label>
+      <button class="button ghost" id="memory-version-save" type="button">保存当前项目快照</button>
+    </div>
+    <p id="memory-version-result" role="status" aria-live="polite">请选择两个版本查看差异。</p>
+    <div id="memory-version-diff"></div>
+    <p id="memory-version-restore-note">整体恢复包含项目产物、会话与决策记忆、项目长期事实、示例和 badcase；共享团队规则与运行历史保留。恢复前自动备份，恢复后重新确认模块和评审；后续人工拒绝不会被旧快照覆盖。</p>
+    <button class="button primary" id="memory-version-restore" type="button" disabled>恢复到所选旧版本</button>
+  </dialog>
+  <script src="/static/app.js?v=memory-versions1"></script>
   <script src="/static/module-workspace.js?v=module4"></script>
   <script src="/static/case-workspace.js?v=feedback2"></script>
   <script src="/static/chunk-manager.js?v=chunk5"></script>
   <script src="/static/supervisor.js?v=feedback2"></script>
+  <script src="/static/memory-versions.js?v=1"></script>
 </body>
 </html>

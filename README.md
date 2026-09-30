@@ -9,7 +9,7 @@
 - 动态编排：结构化动作、能力白名单、前置条件、人工模块确认、反馈重规划和可恢复暂停。
 - 质量控制：生成与独立评审分离，区分缺陷、待澄清项和可选建议；修复后必须复评，无进展或两轮后仍有阻塞项时暂停。
 - 输出可靠性：严格 JSON 解析、流式进度、错误分类；评审 JSON 格式失败最多重试一次，评审不完整不能通过门禁。
-- Memory：作用域隔离、事实化存储、版本替换、冲突与失效处理，保留反馈和决策来源。
+- Memory：作用域隔离、事实版本链、统一差异对比、长期事实回滚、项目快照与单进程原子恢复。见 [Memory 版本与恢复](docs/memory-versions.md)。
 - 知识检索：关键词与向量混合召回、父子分块、证据追踪、知识版本与领域隔离。
 - 可观测性：Agent/LLM/Tool Trace、耗时、Token 用量、降级与动作观察记录。
 - 工作台：需求解析、模块编辑、用例采纳/修改/拒绝、CSV/JSON/XMind 导出、公开数据集评测。
@@ -79,6 +79,7 @@ python tests/manual_agentic_smoke.py --stream --model glm-5.3 --reasoning-effort
 | `app/review_policy.py` | 评审分类、阻塞规则和问题历史 |
 | `app/orchestrator.py` | 业务编排、产物保存及人工反馈 |
 | `app/adaptive_memory.py` | 长期记忆及生命周期 |
+| `app/memory_versions.py` | 统一差异、项目快照及恢复 |
 | `app/domain_equipment.py` | 新编写的虚构设备借用知识包 |
 | `app/api.py`、`app/static/` | FastAPI 与工作台 |
 

@@ -464,6 +464,7 @@ class ProjectState(BaseModel):
     requirement: str
     context: str = ""
     phase: str = "draft"
+    memory_epoch: str = ""
     source_documents: List[ParsedDocument] = Field(default_factory=list)
     analysis: Optional[RequirementAnalysis] = None
     module_tree: Optional[ModuleTree] = None

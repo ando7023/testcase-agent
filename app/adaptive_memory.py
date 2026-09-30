@@ -514,6 +514,7 @@ class AdaptiveMemory:
                 metadata={**previous.metadata, "revision_reason": reason},
             )
             previous.status = "superseded"
+            previous.metadata = {**previous.metadata, "revision_previous_valid_to": previous.valid_to}
             previous.superseded_by = candidate.id
             previous.valid_to = now
             previous.updated_at = now
@@ -548,6 +549,73 @@ class AdaptiveMemory:
             record.invalidation_reason = reason
             self.store.save_memory_records(records)
             return record
+
+    def history(self, memory_id):
+        """Return related revisions, without combining different facts or scopes."""
+        with self.store.memory_transaction():
+            records = self.store.list_memory_records(True)
+            anchor = next((m for m in records if m.id == memory_id), None)
+            if not anchor:
+                raise ValueError("Memory not found")
+            candidates = [m for m in records if self.store.memory_scope(m) == self.store.memory_scope(anchor)
+                          and m.fact_key == anchor.fact_key]
+            ids = {anchor.id}
+            while True:
+                expanded = ids | {m.id for m in candidates if m.supersedes in ids or m.superseded_by in ids}
+                expanded |= {v for m in candidates if m.id in ids for v in (m.supersedes, m.superseded_by) if v}
+                if expanded == ids:
+                    break
+                ids = expanded
+            versions = [m for m in candidates if m.id in ids]
+            active = [m for m in versions if m.status == "active"]
+            current = active[0] if len(active) == 1 else anchor if not active and anchor.status == "inactive" else None
+            return {"current_id": current.id if current else "", "versions": [m.model_dump() for m in versions]}
+
+    def rollback(self, memory_id, target_id, expected_current_id, reason="人工回滚"):
+        """Rollback creates a new revision; the selected historical record is immutable."""
+        if not reason.strip():
+            raise ValueError("Rollback reason is required")
+        with self.store.memory_transaction():
+            records = self.store.list_memory_records(True)
+            by_id = {m.id: m for m in records}
+            current, target = by_id.get(memory_id), by_id.get(target_id)
+            if (not current or not target or memory_id != expected_current_id or
+                    self.history(memory_id)["current_id"] != memory_id or
+                    current.status not in {"active", "inactive"}):
+                raise ValueError("当前版本已变化或不可回滚，请刷新版本历史")
+            ancestors, cursor = set(), current
+            while cursor and cursor.id not in ancestors:
+                if self.store.memory_scope(cursor) != self.store.memory_scope(current):
+                    raise ValueError("Memory lineage crosses scopes")
+                ancestors.add(cursor.id)
+                cursor = by_id.get(cursor.supersedes)
+            if target_id not in ancestors or target.status == "pending_conflict":
+                raise ValueError("只能回滚到同一事实版本链上的历史版本")
+            now = utc_now_iso()
+            if target.status == "superseded" and "revision_previous_valid_to" not in target.metadata:
+                raise ValueError("旧版本缺少原有效期记录，请通过显式修订确认有效期")
+            expires = target.metadata.get("revision_previous_valid_to", "") if target.status == "superseded" else target.valid_to
+            if expires and self._timestamp(expires) <= self._timestamp(now):
+                raise ValueError("历史事实有效期已结束，需明确修订后重新启用")
+            if target.id == current.id and current.status == "active":
+                return current
+            candidate = self._record(target.content, **{
+                key: getattr(target, key) for key in ("memory_type", "user_id", "project_id", "agent_id", "run_id",
+                    "ticket_type", "source", "source_ref", "source_run_id", "source_version_id", "importance", "fact_key")},
+                valid_from=target.valid_from if target.valid_from and self._timestamp(target.valid_from) > self._timestamp(now) else now,
+                valid_to=expires, supersedes=current.id,
+                metadata={**target.metadata, "rollback_target_id": target.id, "revision_reason": reason})
+            current.status = "superseded"
+            current.metadata = {**current.metadata, "revision_previous_valid_to": current.valid_to}
+            current.superseded_by = candidate.id
+            current.valid_to, current.updated_at, current.invalidation_reason = now, now, reason
+            records.append(candidate)
+            for item in records:
+                if (item.status == "pending_conflict" and candidate.fact_key and item.fact_key == candidate.fact_key
+                        and self.store.memory_scope(item) == self.store.memory_scope(candidate)):
+                    item.status, item.superseded_by = "superseded", candidate.id
+            self.store.save_memory_records(records)
+            return candidate
 
     def _extract(self, text: str) -> List[Dict[str, Any]]:
         if not self.llm_extraction or not self.llm.enabled:

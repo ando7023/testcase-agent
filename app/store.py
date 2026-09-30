@@ -1,8 +1,11 @@
 import json
+import base64
+import os
 import re
 import sqlite3
 import threading
 import uuid
+from functools import wraps
 from contextlib import contextmanager, nullcontext
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -17,7 +20,17 @@ from .models import (
 )
 
 
+def locked_store(method):
+    @wraps(method)
+    def wrapped(self, *args, **kwargs):
+        with self._lock:
+            return method(self, *args, **kwargs)
+    return wrapped
+
+
 class JsonStore:
+    _roots_lock = threading.Lock()
+    _root_state = {}
     def __init__(self, root: Path) -> None:
         self.root = root
         self.projects_dir = root / "projects"
@@ -31,9 +44,13 @@ class JsonStore:
         self.badcase_file = root / "badcases.json"
         self.scenario_rules_file = root / "scenario_rules.json"
         self.scenario_templates_file = root / "scenario_templates.json"
-        self._lock = threading.RLock()
-        self._project_leases = {}
+        with self._roots_lock:
+            self._lock, self._project_leases = self._root_state.setdefault(
+                os.path.normcase(str(root.resolve())), (threading.RLock(), {}))
         self.tracer = None
+        self._journal = self.root / ".memory-transaction.json"
+        with self._lock:
+            self._recover_transaction()
 
     @contextmanager
     def project_lease(self, project_id):
@@ -140,8 +157,15 @@ class JsonStore:
         projects = [self.get_project(path.stem) for path in self.projects_dir.glob("*.json")]
         return sorted(projects, key=lambda item: item.updated_at, reverse=True)
 
+    @locked_store
     def sync_case_examples(self, project):
         """Keep historical examples but index only the currently accepted body."""
+        mutations, invalidated = self.case_example_mutations(project, self.list_knowledge())
+        if mutations:
+            self.apply_knowledge_mutation(mutations, invalidated)
+
+    @staticmethod
+    def case_example_mutations(project, documents):
         from .feedback import current_feedback, example_document
         ticket_type = project.analysis.ticket_types[0] if project.analysis and project.analysis.ticket_types else "COMMON"
         active = {}
@@ -151,7 +175,7 @@ class JsonStore:
                 payload = example_document(project, case, ticket_type)
                 active[payload["id"]] = payload
         mutations, invalidated = [], []
-        for document in self.list_knowledge():
+        for document in documents:
             if document.doc_type != "case_example":
                 continue
             owned = document.metadata.get("project_id") == project.id or document.id.startswith("EX-{}-".format(project.id))
@@ -163,9 +187,9 @@ class JsonStore:
             mutations.append(document.model_dump())
             invalidated.append(document.id)
         mutations.extend(active.values())
-        if mutations:
-            self.apply_knowledge_mutation(mutations, invalidated)
+        return mutations, invalidated
 
+    @locked_store
     def project_knowledge(self, project_id=""):
         """Unknown/global scopes never receive human case examples."""
         from .feedback import current_feedback, case_fingerprint, example_content
@@ -247,6 +271,7 @@ class JsonStore:
         candidate_payload.pop("updated_at", None)
         return previous_payload == candidate_payload
 
+    @locked_store
     def upsert_knowledge(self, payloads: List[Dict[str, Any]]) -> int:
         documents = {document.id: document for document in self.list_knowledge()}
         changed = 0
@@ -550,13 +575,74 @@ class JsonStore:
         return memory
 
     def _read_json(self, path: Path, default: Any) -> Any:
-        if not path.exists():
-            return default
-        with path.open("r", encoding="utf-8") as handle:
-            return json.load(handle)
+        with self._lock:
+            self._recover_transaction()
+            if not path.exists():
+                return default
+            with path.open("r", encoding="utf-8") as handle:
+                return json.load(handle)
 
     def _write_json(self, path: Path, payload: Any) -> None:
+        with self._lock:
+            self._recover_transaction()
+            self._write_json_file(path, payload)
+
+    @staticmethod
+    def _write_bytes_file(path, content):
+        path.parent.mkdir(parents=True, exist_ok=True)
         temporary = path.with_suffix(path.suffix + ".tmp")
-        with temporary.open("w", encoding="utf-8") as handle:
-            json.dump(payload, handle, ensure_ascii=False, indent=2)
+        with temporary.open("wb") as handle:
+            handle.write(content)
+            handle.flush()
+            os.fsync(handle.fileno())
         temporary.replace(path)
+
+    def _write_json_file(self, path, payload):
+        self._write_bytes_file(path, json.dumps(payload, ensure_ascii=False, indent=2).encode("utf-8"))
+
+    def _transaction_path(self, name):
+        path = (self.root / name).resolve()
+        try:
+            path.relative_to(self.root.resolve())
+        except ValueError:
+            raise ValueError("Transaction path escapes data directory")
+        if path.suffix != ".json" or path == self._journal.resolve():
+            raise ValueError("Invalid transaction target")
+        return path
+
+    def _recover_transaction(self):
+        if not self._journal.exists():
+            return
+        journal = json.loads(self._journal.read_text(encoding="utf-8"))
+        # Validate every target before attempting any recovery.
+        entries = [(self._transaction_path(item["path"]),
+                    base64.b64decode(item["before"], validate=True) if item["before"] is not None else None)
+                   for item in journal["entries"]]
+        for path, before in entries:
+            if before is None:
+                if path.exists():
+                    path.unlink()
+            else:
+                self._write_bytes_file(path, before)
+        self._journal.unlink()
+
+    def atomic_write(self, payloads):
+        """Single-process atomic visibility; durable undo journal for interrupted writes.
+
+        All readers use the same root lock. Journal deletion is the commit point.
+        JSON remains the source of truth; vector indexes are derived caches.
+        """
+        with self._lock:
+            self._recover_transaction()
+            targets = [(self._transaction_path(name), payload) for name, payload in payloads.items()]
+            journal = {"entries": [{"path": str(path.relative_to(self.root.resolve())),
+                        "before": base64.b64encode(path.read_bytes()).decode("ascii") if path.exists() else None}
+                       for path, _ in targets]}
+            self._write_json_file(self._journal, journal)
+            try:
+                for path, payload in targets:
+                    self._write_json_file(path, payload)
+                self._journal.unlink()
+            except Exception:
+                self._recover_transaction()
+                raise

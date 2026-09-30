@@ -74,6 +74,8 @@ def artifact_fingerprint(project):
         "module_tree": project.module_tree.model_dump() if project.module_tree else None,
         "cases": [case.model_dump(exclude={"review_status", "human_status"}) for case in project.cases],
     }
+    if project.memory_epoch:
+        data["memory_epoch"] = project.memory_epoch
     return hashlib.sha256(json.dumps(data, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
 
 

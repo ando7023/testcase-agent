@@ -5,6 +5,7 @@ import io
 import json
 import os
 import re
+from contextlib import nullcontext
 from pathlib import Path
 from typing import List, Optional
 
@@ -19,6 +20,7 @@ from .evaluation import list_datasets
 from .orchestrator import PipelineError, TestCaseOrchestrator
 from .store import JsonStore
 from .supervisor import AgenticSupervisor, CAPABILITIES
+from .memory_versions import MemoryVersions, version_diff
 from dataclasses import asdict
 
 
@@ -866,6 +868,91 @@ def rag_evaluate(payload: RAGEvaluationCreate):
 @app.get("/api/memory")
 def get_memory(include_inactive: bool = False):
     return orchestrator.memory_catalog(include_inactive=include_inactive)
+
+
+class MemorySnapshotCreate(BaseModel):
+    label: str = Field(default="手动快照", min_length=1, max_length=160)
+
+
+class MemoryVersionCompare(BaseModel):
+    kind: Literal["snapshot", "cases", "modules"]
+    left_id: str = Field(min_length=1, max_length=120)
+    right_id: str = Field(default="current", max_length=120)
+
+
+class ProjectMemoryRestore(BaseModel):
+    snapshot_id: str = Field(pattern=r"^MS-[a-f0-9]{32}$")
+    expected_fingerprint: str = Field(pattern=r"^[a-f0-9]{64}$")
+
+
+class FactRollback(BaseModel):
+    target_id: str = Field(min_length=1, max_length=120)
+    expected_current_id: str = Field(min_length=1, max_length=120)
+    reason: str = Field(default="人工回滚", min_length=1, max_length=1000)
+
+
+@app.get("/api/projects/{project_id}/memory-versions")
+def memory_versions(project_id: str):
+    require_project(project_id)
+    try:
+        return MemoryVersions(store).catalog(project_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+
+
+@app.post("/api/projects/{project_id}/memory-versions")
+def create_memory_snapshot(project_id: str, payload: MemorySnapshotCreate):
+    require_project(project_id)
+    return MemoryVersions(store).create(project_id, payload.label)
+
+
+@app.post("/api/projects/{project_id}/memory-versions/diff")
+def compare_memory_versions(project_id: str, payload: MemoryVersionCompare):
+    require_project(project_id)
+    try:
+        return MemoryVersions(store).compare(project_id, payload.kind, payload.left_id, payload.right_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+
+
+@app.post("/api/projects/{project_id}/memory-versions/restore")
+def restore_project_memory(project_id: str, payload: ProjectMemoryRestore):
+    require_project(project_id)
+    try:
+        return MemoryVersions(store).restore(project_id, payload.snapshot_id, payload.expected_fingerprint)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+
+
+@app.get("/api/memory/{memory_id}/history")
+def memory_history(memory_id: str):
+    try:
+        return orchestrator.adaptive_memory.history(memory_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+
+
+@app.get("/api/memory/{memory_id}/diff")
+def compare_fact_versions(memory_id: str, target_id: str):
+    try:
+        history = orchestrator.adaptive_memory.history(memory_id)
+        versions = {v["id"]: v for v in history["versions"]}
+        if target_id not in versions:
+            raise ValueError("Target is not in this fact's version history")
+        return dict(version_diff(versions[target_id], versions[memory_id]), kind="fact",
+                    left_id=target_id, right_id=memory_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+
+
+@app.post("/api/memory/{memory_id}/rollback")
+def rollback_fact(memory_id: str, payload: FactRollback):
+    try:
+        record = next((m for m in store.list_memory_records(True) if m.id == memory_id), None)
+        with store.project_lease(record.project_id) if record and record.project_id else nullcontext():
+            return orchestrator.adaptive_memory.rollback(memory_id, payload.target_id, payload.expected_current_id, payload.reason)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
 
 
 @app.post("/api/memory/rules")

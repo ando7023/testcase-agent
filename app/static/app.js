@@ -660,13 +660,13 @@ $('#memory-search-form').addEventListener('submit', async event => {
 });
 
 async function loadContext() {
-  const [knowledge, memory, templates] = await Promise.all([api('/api/knowledge'), api('/api/memory'), api('/api/scenario-templates')]);
+  const [knowledge, memory, templates] = await Promise.all([api('/api/knowledge'), api(`/api/memory?include_inactive=${Boolean($('#memory-show-history')?.checked)}`), api('/api/scenario-templates')]);
   if (window.renderChunkKnowledge) window.renderChunkKnowledge(knowledge);
   const records = memory.records || [];
   const typeCounts = Object.entries(memory.stats?.by_type || {}).map(([key,value]) => `${key} ${value}`).join(' · ');
   $('#memory-stats').innerHTML = `<div class="rag-summary"><b>${memory.stats?.total || 0} memories</b><span>${escapeHtml(typeCounts || '暂无长期记忆')}</span></div>`;
-  const visibleMemories = records.slice().reverse().slice(0, 20);
-  $('#memory-list').innerHTML = visibleMemories.map((item, index) => `<div class="compact-item"><strong>${escapeHtml(item.content)}</strong><span>${escapeHtml(item.memory_type)} · ${escapeHtml(item.ticket_type || 'COMMON')} · ${escapeHtml(item.project_id || '团队共享')} · ${escapeHtml(item.agent_id || 'shared')} · 访问 ${item.access_count || 0}</span><div><button class="button ghost" data-memory-edit="${index}" type="button">修改规则</button> <button class="button ghost" data-memory-revoke="${index}" type="button">停用</button></div></div>`).join('') || '<div class="compact-item">尚未形成长期记忆</div>';
+  const visibleMemories = records.slice().reverse();
+  $('#memory-list').innerHTML = visibleMemories.map((item, index) => `<div class="compact-item"><strong>${escapeHtml(item.content)}</strong><span>${escapeHtml(item.memory_type)} · ${escapeHtml(item.status)} · ${escapeHtml(item.ticket_type || 'COMMON')} · ${escapeHtml(item.project_id || '团队共享')} · ${escapeHtml(item.agent_id || 'shared')} · 访问 ${item.access_count || 0}</span><div><button class="button ghost" data-memory-edit="${index}" type="button" ${item.status === 'superseded' ? 'disabled' : ''}>修改规则</button> <button class="button ghost" data-memory-revoke="${index}" type="button" ${item.status === 'active' ? '' : 'disabled'}>停用</button></div></div>`).join('') || '<div class="compact-item">尚未形成长期记忆</div>';
   $('#memory-list').querySelectorAll('[data-memory-edit], [data-memory-revoke]').forEach(button => {
     button.addEventListener('click', async () => {
       const editing = button.hasAttribute('data-memory-edit');
@@ -685,6 +685,14 @@ async function loadContext() {
       } catch (error) { notify(error.message); }
       finally { button.disabled = false; }
     });
+  });
+  $('#memory-list').querySelectorAll('.compact-item').forEach((element, index) => {
+    const button = document.createElement('button');
+    button.className = 'button ghost';
+    button.type = 'button';
+    button.textContent = '版本对比 / 回滚';
+    button.addEventListener('click', () => window.openFactVersions(visibleMemories[index].id));
+    element.appendChild(button);
   });
   $('#template-list').innerHTML = templates.map(item => `<div class="compact-item"><strong>${escapeHtml(item.name)}</strong><span>${escapeHtml(item.status)} · v${item.version} · 支持样本 ${item.support_count}</span></div>`).join('') || '<div class="compact-item">尚未形成场景模板</div>';
 }

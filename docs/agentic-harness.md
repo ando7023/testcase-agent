@@ -94,6 +94,12 @@ python tests/manual_agentic_smoke.py --root data/live_smoke/glm-20260920-130433 
 
 ## 当前边界与验证
 
+### 项目 Memory 版本与恢复（2026-09-30）
+
+顶部 **Memory 版本** 提供项目整体快照、模块/用例及决策记忆的统一差异对比；**知识与记忆** 中每条事实可以查看历史并回滚为新版本。项目恢复使用单进程文件事务，自动保存恢复前备份，并支持写入失败撤销和中断后的日志恢复。完整范围、API 及操作步骤见 [Memory 版本与恢复](memory-versions.md)。
+
+整体恢复会清空旧确认、评审与评测，并更新 `memory_epoch`，防止旧暂停运行复用之前的评审凭证。后续人工反馈和运行审计保留，团队共享规则与其他项目不回退。这不提供 Agent 动作重放或多进程事务能力。
+
 ### 人工验收与示例生命周期（2026-09-28）
 
 项目返回 `human_acceptance`：`status` 为 `pending / partial / accepted`，并提供 `total / accepted / rejected / pending / legacy_verified`。用例工作区、评审页和运行面板显示当前正文的验收情况。它与运行 `status/degraded` 独立；全部采纳不会抹去历史 fallback，也不代表接口执行通过。
