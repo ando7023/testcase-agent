@@ -448,6 +448,8 @@ function benchmarkMetricValue(key, value) {
 }
 
 function renderBenchmarkReport(report) {
+  const config = report.samples?.find(s => s.llm_config)?.llm_config;
+  const configuration = config ? `${config.model} · ${config.stream ? '流式' : '非流式'} · reasoning=${config.reasoning_effort || '默认'} · 读取超时 ${config.timeout_seconds}s · 输出上限 ${config.max_tokens || '服务默认'} · 知识仅来自样本` : '';
   const metrics = Object.entries(report.metrics || {}).map(([key, value]) => `
     <div><strong>${benchmarkMetricValue(key, value)}</strong><span>${escapeHtml(benchmarkLabels[key] || key)}</span></div>`).join('');
   const samples = (report.samples || []).map(sample => {
@@ -458,12 +460,17 @@ function renderBenchmarkReport(report) {
       .join(' · ');
     const outcomes = report.schema_version === 2
       ? `流程 ${sample.flow_completed ? '完成' : '未完成'} · 质量门禁 ${sample.quality_passed === null ? '未评定' : sample.quality_passed ? '通过' : '未通过'} · 技术失败 ${sample.technical_failure ? '是' : '否'} · 降级 ${sample.degraded ? '是' : '否'}` : details;
-    return `<div class="benchmark-sample"><strong>${escapeHtml(sample.id)}</strong><span>${escapeHtml(sample.status)} · ${escapeHtml(outcomes)}</span>${sample.question ? `<small>${escapeHtml(sample.question)}</small>` : ''}${sample.error || sample.error_code ? `<small>${escapeHtml(sample.error || sample.error_code)}</small>` : ''}${sample.run_id ? `<small>运行 ${escapeHtml(sample.run_id)} · ${sample.steps} 步 · ${escapeHtml(sample.run_status)}</small>` : ''}</div>`;
+    const timing = (sample.call_diagnostics || []).filter(d => d.error_code).map(d => {
+      const ms = v => v == null ? '未观测到' : `${(v / 1000).toFixed(2)}s`;
+      return `调用 ${d.call} ${d.error_code} · 阶段 ${d.phase || '未知'} · 收到响应头 ${ms(d.connected_ms)} · 首事件 ${ms(d.first_event_ms)} · 最后接收 ${ms(d.last_receive_ms)} · 用时 ${ms(d.elapsed_ms)}`;
+    }).join('\n');
+    return `<div class="benchmark-sample"><strong>${escapeHtml(sample.id)}</strong><span>${escapeHtml(sample.status)} · ${escapeHtml(outcomes)}</span>${sample.question ? `<small>${escapeHtml(sample.question)}</small>` : ''}${sample.error || sample.error_code ? `<small>${escapeHtml(sample.error || sample.error_code)}</small>` : ''}${sample.run_id ? `<small>运行 ${escapeHtml(sample.run_id)} · ${sample.steps} 步 · ${escapeHtml(sample.run_status)}</small>` : ''}${timing ? `<small>${escapeHtml(timing)}</small>` : ''}</div>`;
   }).join('');
   $('#benchmark-result').innerHTML = `
     <div class="benchmark-score ${report.schema_version === 2 ? 'benchmark-score-v2' : ''}"><strong>${report.schema_version === 2 ? '分项' : Number(report.score || 0)}</strong><span>${escapeHtml(report.dataset_id)}<br>${report.sample_count || 0} samples · ${escapeHtml(report.mode || 'offline')} · ${escapeHtml(report.execution || '旧版固定流程')} · ${escapeHtml(report.status || '')}</span></div>
     <p class="benchmark-lead">${report.schema_version === 2 ? `${report.mode === 'offline' ? '离线规则回归，不代表模型能力。' : '模型评测；质量通过仅代表内部门禁，不代表独立业务验收。'} ${report.human_policy === 'simulate_confirm' ? '已选择模拟模块确认，不自动回答业务澄清或追加预算。' : '保留人工确认暂停。'} ${escapeHtml(report.metric_notes || '')}` : '旧版报告：综合分、passed 和成功率沿用旧口径，不能作为完整 Agentic 质量结论。'}</p>
     <div class="benchmark-metrics">${metrics}</div>
+    ${configuration ? `<p class="benchmark-lead">实际配置：${escapeHtml(configuration)}</p>` : ''}
     ${samples ? `<details class="benchmark-samples"><summary>查看样本明细</summary>${samples}</details>` : ''}`;
 }
 
@@ -526,6 +533,9 @@ $('#benchmark-form').addEventListener('submit', async event => {
       execution: $('#benchmark-execution').value,
       human_policy: $('#benchmark-human-policy').disabled ? 'pause' : $('#benchmark-human-policy').value,
       max_steps: Number($('#benchmark-max-steps').value),
+      stream: $('#benchmark-stream').value === 'true',
+      reasoning_effort: $('#benchmark-reasoning').value,
+      timeout_seconds: Number($('#benchmark-timeout').value),
     })});
     renderBenchmarkReport(report);
     await loadBenchmarks();

@@ -270,7 +270,8 @@ class PublicBenchmarkTests(unittest.TestCase):
                 "suite": "ebt_generation", "execution": "agentic", "human_policy": "simulate_confirm", "max_steps": 7})
             self.assertEqual(response.status_code, 200)
             run.assert_called_once_with("ebt_generation", 3, "test", "offline",
-                                        execution="agentic", human_policy="simulate_confirm", max_steps=7)
+                                        execution="agentic", human_policy="simulate_confirm", max_steps=7,
+                                        llm_options={"stream": True, "reasoning_effort": "low", "timeout_seconds": 180})
             self.assertEqual(client.post("/api/benchmarks/run", json={
                 "suite": "ebt_generation", "max_steps": 21}).status_code, 422)
         with patch.object(api.orchestrator, "run_public_benchmark", side_effect=ValueError("unsupported")):

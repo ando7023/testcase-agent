@@ -103,6 +103,8 @@ class AgentHarness:
                 output = agent.run(payload, context)
                 status = "success"
             except LLMError as exc:
+                if getattr(self, "allow_fallback", True) is False:
+                    raise
                 error = str(exc)
                 mode = "fallback"
                 fallback_context = dict(context)
@@ -829,7 +831,8 @@ Do not invent requirements. Return JSON: {"findings": [{"severity": "high|medium
                         message=str(item.get("message", ""))[:300],
                     ))
             except LLMError:
-                pass
+                if getattr(self.llm, "strict_review_failures", False):
+                    raise
         penalty = sum({"high": 15, "medium": 6}.get(item.severity, 2) for item in findings)
         return ModuleReviewReport(score=max(0, 100 - penalty), findings=findings, rounds=0)
 
@@ -1384,6 +1387,7 @@ Return JSON: {"findings": [{"severity": "high|medium|low", "case_id": "...",
                 "disposition": {"type": "string", "enum": ["defect", "clarification", "suggestion"]},
                 "issue_type": {"type": "string", "enum": sorted(ISSUE_TYPES)},
                 "requirement_ids": {"type": "array", "items": {"type": "string"}},
+                "related_case_ids": {"type": "array", "items": {"type": "string"}},
                 "evidence": {"type": "string", "minLength": 1, "maxLength": 800},
                 "message": {"type": "string", "minLength": 1, "maxLength": 1500},
             },
@@ -1493,8 +1497,8 @@ Return JSON: {"findings": [{"severity": "high|medium|low", "case_id": "...",
         # Semantic critique on top of structural checks (Generator-Critic pattern).
         if self.llm.enabled and not context.get("force_demo"):
             try:
-                critique = self._generate_critique(
-                    json.dumps({
+                from .semantic_review import review_cases
+                critique = review_cases(self._generate_critique, {
                         "raw_requirement": payload.get("requirement", ""),
                         "project_context": payload.get("project_context", ""),
                         "analysis": analysis.model_dump(),
@@ -1502,13 +1506,9 @@ Return JSON: {"findings": [{"severity": "high|medium|low", "case_id": "...",
                         "review_focus": payload.get("review_focus", ""),
                         "previous_reviews": payload.get("review_history", []),
                         "issue_ledger": payload.get("issue_ledger", {}),
-                        "cases": [case.model_dump() for case in cases],
-                    }, ensure_ascii=False),
-                )
+                    }, [case.model_dump() for case in cases])
                 if not isinstance(critique, dict) or not isinstance(critique.get("findings"), list):
                     raise LLMError("Critique requires an explicit findings array")
-                if len(critique["findings"]) > 20:
-                    raise LLMError("Critique exceeded the 20-finding limit")
                 semantic = []
                 case_map = {case.id: case for case in cases}
                 known_requirements = {req.id for req in analysis.atomic_requirements}
@@ -1554,6 +1554,7 @@ Return JSON: {"findings": [{"severity": "high|medium|low", "case_id": "...",
                     "invalid_json": "模型响应不是有效 JSON，请检查响应格式后重试",
                     "incomplete_response": "模型响应中断或未正常完成，请检查服务状态后重试",
                     "request_failed": "模型请求失败或评审响应不符合约定，请检查调用诊断后重试",
+                    "context_limit": "评审输入或分批调用数量超过限制，请缩小用例集或拆分过长内容后重试",
                 }
                 code = exc.code if exc.code in reasons else "request_failed"
                 findings.append(ReviewFinding(

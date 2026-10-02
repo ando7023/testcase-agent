@@ -8,6 +8,7 @@
 2. EBT、StorySeek 可选 Workflow 或 Agentic。Workflow 按固定顺序调用 Worker；Agentic 调用项目的 `AgenticSupervisor.start/resume`，使用相同的决策、执行、评审及预算门禁。
 3. EBT 默认停在模块确认。批量运行完整生成流程需显式选择「模拟确认模块」；报告记录 `benchmark_simulator`，不会生成代表真人操作的确认事实。
 4. Agentic 可设置 1–20 步，默认 12 步。模拟确认最多续跑一次，不回答业务澄清、不增加预算。暂停或预算耗尽会作为未完成样本保留。
+5. 网页评测默认使用流式、`reasoning_effort=low`、连接/读取超时 180 秒，可在表单修改。它们覆盖当前样本客户端配置，不修改 `.env`，也不继承手动脚本的参数。模型名称、输出上限等仍来自服务端配置，报告保存实际取值。
 
 真实模式要求已配置且启用模型，否则返回配置错误，不静默改成离线。可能产生模型调用费用；先使用 1 个样本验证配置。离线模式关闭样本 Worker 的模型调用，仅验证规则与流程，不代表模型自主能力。
 
@@ -35,9 +36,23 @@ StorySeek 的 split 采用项目划分。其他套件不使用 split；Critic �
 
 EBT/StorySeek 词元指标以全部样本计，执行异常的缺失指标按零计；SRS 文本提取召回以全部样本计，相关文本召回仅针对成功且有相关文本标注的样本，压缩率/告警率针对成功解析样本。它们是诊断指标，不能替代独立标注和真实测试执行。
 
-每个样本使用独立的 `benchmark_runs/BR-…/sample-0001/`，包含项目、Memory、Trace 及 Agentic 运行记录；样本之间不共享学习结果，也不写入已有业务项目。初始知识仍沿用当前应用的内置知识包，尚未建立针对各公开数据集的独立知识配置。
+每个样本使用独立的 `benchmark_runs/BR-…/sample-0001/`，包含项目、Memory、Trace 及 Agentic 运行记录；样本之间不共享学习结果，也不写入已有业务项目。自 2026-10-02 起，`knowledge_policy=sample_only`：评测 Worker 不初始化设备借用知识，检索与领域事实工具不提供内置业务契约。原始材料直接进入需求理解；相关黄金测试仍仅用于算分，不注入生成输入。普通业务工作台仍使用应用知识库。历史污染报告不自动改写，需要新建评测重跑。
+
+真实评测中，关键 Worker 的 LLMError 不再触发 demo 回退；模块语义评审失败也不再静默忽略。用例语义评审失败保留 `review_incomplete`，不能以结构分数通过。模型主动请求业务澄清仍会暂停，这次没有自动补业务答案。
 
 报告另存 `run_id`、`run_status`、步骤与动作、模拟确认事件、耗时、逻辑 JSON 调用数及错误次数。`llm_calls` 是客户端 `generate_json` 调用次数，不是 HTTP 请求次数或 token 数。完整模型成本统计与运行耗时预算未在本次实现。
+
+每个样本的 `llm_config` 保存模型、流式、思考强度、思考开关、超时、输出上限及采样参数；`call_diagnostics` 保存每次调用的阶段、错误分类、耗时和接收时间。时间字段是相对请求开始的毫秒数：`connected_ms` 表示已经收到 HTTP 响应头，并非 TCP 握手耗时；`first_event_ms` 是首个合法 SSE JSON 事件，`first_content_ms` 是首段正文；`last_receive_ms` 是最近完整 SSE 行或非流式响应块。`null` 表示未观测到，不能当作零延迟。非流式没有 token 事件，因此首事件/首正文字段留空。
+
+诊断只记录思考字符数，不保存思考原文。失败请求也写入 Trace 和评测报告；阶段 `awaiting_headers`、`awaiting_first_event`、`awaiting_body`、`receiving`、`parsing` 可帮助定位。读取超时限制单次网络等待，不是整个调用总时限；持续收到流事件时总耗时可以超过 180 秒。服务端排队、模型计算与代理阻塞仍不能仅凭客户端计时完全区分。
+
+## 大用例集语义评审
+
+用例 Critic（工作台和评测共用）按最多 12 条、约 24,000 个 JSON 字符分批，全量保留每条用例正文。所有批次保留原始需求、分析、用户约束和评审历史；共享上下文加用例的单次请求上限为 64,000 字符。超过上限返回 `context_limit`，不悄悄截断完整评审输入。
+
+多批次完成后，以带 ID、需求关联和正文摘录的卡片筛查重复及矛盾；卡片按最多 48 条、20,000 字符分组，各组两两组合，保证远端批次也能进入候选检查。卡片是有损筛查线索，不是完整证据。候选必须提供 2–12 个相关用例 ID，再携带这些用例全文复核；筛查结论不直接写成缺陷，复核可以否决候选。
+
+单次语义评审最多 64 个批次/筛查/复核请求，每个请求仍允许既有的一次 JSON 格式重试，最多可能产生 128 次模型调用。这是上限而非固定调用量，也不增加 Supervisor 步数预算；分批可能增加总调用数与耗时。任意阶段失败或超预算均保持评审未完成；每响应最多 20 项 findings，汇总不截断为 20 项。卡片可能漏掉未包含的细节，不能声称跨批语义检查穷尽所有问题。
 
 历史报告原样保留，界面标识「旧版」；旧 `passed` / 综合分不能重新解释为 Agentic 质量结论。
 
@@ -53,6 +68,9 @@ $payload = @{
     execution = 'agentic'
     human_policy = 'simulate_confirm'
     max_steps = 12
+    stream = $true
+    reasoning_effort = 'low'
+    timeout_seconds = 180
 } | ConvertTo-Json
 Invoke-RestMethod -Uri 'http://127.0.0.1:8765/api/benchmarks/run' `
     -Method Post -ContentType 'application/json' -Body $payload

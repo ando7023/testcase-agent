@@ -206,6 +206,9 @@ class BenchmarkRunCreate(BaseModel):
     execution: Literal["workflow", "agentic"] = "workflow"
     human_policy: Literal["pause", "simulate_confirm"] = "pause"
     max_steps: int = Field(default=12, ge=1, le=20)
+    stream: bool = True
+    reasoning_effort: Literal["low", "high", "max"] = "low"
+    timeout_seconds: int = Field(default=180, ge=1, le=900)
 
 
 class MemoryCreate(BaseModel):
@@ -835,6 +838,8 @@ def run_public_benchmark(payload: BenchmarkRunCreate):
         return orchestrator.run_public_benchmark(
             payload.suite, payload.limit, payload.split, payload.mode,
             execution=payload.execution, human_policy=payload.human_policy, max_steps=payload.max_steps,
+            llm_options={"stream": payload.stream, "reasoning_effort": payload.reasoning_effort,
+                         "timeout_seconds": payload.timeout_seconds},
         )
     except (OSError, ValueError, PipelineError) as exc:
         raise HTTPException(status_code=422, detail=str(exc))

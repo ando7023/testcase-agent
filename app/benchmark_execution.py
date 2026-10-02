@@ -1,36 +1,55 @@
 """Isolated benchmark execution; no implicit human answers or budget extensions."""
 import time
+import json
 
 from .review_policy import is_blocking
 
 
 class BenchmarkExecution:
-    def __init__(self, workspace, factory, mode, execution, human_policy, max_steps):
+    def __init__(self, workspace, factory, mode, execution, human_policy, max_steps, llm_options=None):
         self.workspace, self.factory = workspace, factory
         self.mode, self.execution = mode, execution
         self.human_policy, self.max_steps = human_policy, max_steps
         self.count = 0
+        self.llm_options = {"stream": True, "reasoning_effort": "low", "timeout_seconds": 180}
+        self.llm_options.update(llm_options or {})
 
     def sample(self, sample_id, operation, quality_applicable=True):
         self.count += 1
         # Index rather than external sample ID: neither traversal nor duplicate IDs
         # can cause different samples to share state.
         worker = self.factory(self.workspace / "sample-{:04d}".format(self.count))
+        worker.knowledge_policy = "sample_only"
+        worker.harness.allow_fallback = self.mode != "live"
+        worker.llm.strict_review_failures = self.mode == "live"
+        worker.llm.stream_json = self.llm_options["stream"]
+        worker.llm.reasoning_effort = self.llm_options["reasoning_effort"]
+        worker.llm.timeout = self.llm_options["timeout_seconds"]
         if self.mode == "offline":
             worker.llm.api_key = ""
         elif not worker.llm.enabled:
             raise ValueError("真实模型评测需要启用模型并配置密钥，不能静默改为离线模式")
         start = time.perf_counter()
         original = worker.llm.generate_json
-        calls, failures = [], []
+        calls, failures, diagnostics = [], [], []
 
         def observed(*args, **kwargs):
             calls.append(1)
+            worker.llm.last_call_diagnostics = {}
             try:
                 return original(*args, **kwargs)
             except Exception as exc:
                 failures.append(getattr(exc, "code", type(exc).__name__))
                 raise
+            finally:
+                detail = {"call": len(calls), **worker.llm.last_call_diagnostics}
+                try:
+                    prompt = json.loads(args[1] if len(args) > 1 else kwargs.get("user_prompt", ""))
+                    if isinstance(prompt, dict) and prompt.get("review_phase"):
+                        detail.update(review_phase=prompt["review_phase"], case_count=len(prompt.get("cases", [])))
+                except (TypeError, ValueError):
+                    pass
+                diagnostics.append(detail)
 
         worker.llm.generate_json = observed
         trace = None
@@ -62,6 +81,8 @@ class BenchmarkExecution:
             result["status"] = ("passed" if result["quality_passed"] is True else
                                 "quality_failed" if result["quality_passed"] is False else "completed")
         result.update(seconds=round(time.perf_counter() - start, 3), llm_calls=len(calls),
+                      knowledge_policy="sample_only", llm_config=worker.llm.effective_settings(),
+                      call_diagnostics=diagnostics,
                       llm_error_count=len(failures), worker_modes=modes,
                       validation_level="model" if self.mode == "live" else "offline_structural",
                       trace_id=trace.trace_id if trace else None, workspace=str(worker.store.root.relative_to(self.workspace)),

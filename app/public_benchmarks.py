@@ -416,6 +416,7 @@ class PublicBenchmarkService:
         execution: str = "workflow",
         human_policy: str = "pause",
         max_steps: int = 12,
+        llm_options: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         limit = max(1, min(20, int(limit)))
         if mode not in {"offline", "live"}:
@@ -426,9 +427,16 @@ class PublicBenchmarkService:
             raise ValueError("Agentic max_steps must be an integer from 1 to 20")
         if execution == "agentic" and suite not in {"ebt_generation", "storyseek_pipeline"}:
             raise ValueError("This component suite does not support Agentic execution")
+        options = {"stream": True, "reasoning_effort": "low", "timeout_seconds": 180}
+        options.update(llm_options or {})
+        if (set(options) != {"stream", "reasoning_effort", "timeout_seconds"}
+                or type(options["stream"]) is not bool
+                or options["reasoning_effort"] not in {"low", "high", "max"}
+                or type(options["timeout_seconds"]) is not int or not 1 <= options["timeout_seconds"] <= 900):
+            raise ValueError("Invalid benchmark model options")
         report_id = "BR-" + uuid.uuid4().hex[:12]
         workspace = self.data_root / "benchmark_runs" / report_id
-        runner = BenchmarkExecution(workspace, pipeline_factory, mode, execution, human_policy, max_steps)
+        runner = BenchmarkExecution(workspace, pipeline_factory, mode, execution, human_policy, max_steps, options)
         runners = {
             "ebt_generation": lambda: self._run_ebt(runner, limit),
             "storyseek_pipeline": lambda: self._run_storyseek(
@@ -446,6 +454,8 @@ class PublicBenchmarkService:
             "mode": mode,
             "schema_version": 2,
             "execution": execution,
+            "requested_llm_config": options,
+            "knowledge_policy": "sample_only",
             "human_policy": human_policy,
             "max_steps": max_steps if execution == "agentic" else None,
             "split": split if suite == "storyseek_pipeline" else "not_applicable",

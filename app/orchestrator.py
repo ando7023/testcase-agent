@@ -77,13 +77,15 @@ def classify_badcase(reason: str) -> str:
 
 
 class TestCaseOrchestrator:
-    def __init__(self, store: JsonStore) -> None:
+    def __init__(self, store: JsonStore, *, knowledge_policy: str = "application") -> None:
+        self.knowledge_policy = knowledge_policy
         self.store = store
         self.tracer = TraceManager(store.root)
         self.store.set_tracer(self.tracer)
         self.llm = OpenAICompatibleClient(self.tracer)
         self.harness = AgentHarness(self.tracer)
-        self.store.upsert_knowledge(build_equipment_knowledge())
+        if knowledge_policy == "application":
+            self.store.upsert_knowledge(build_equipment_knowledge())
         self.document_agent = DocumentParsingAgent(self.llm)
         self.retrieval_agent = KnowledgeRetrievalAgent(self.llm, self.store.knowledge_index_file)
         self.tool_registry = self._build_tool_registry()
@@ -175,8 +177,9 @@ class TestCaseOrchestrator:
             "hits": result["hits"][:6],
         }
 
-    @staticmethod
-    def _tool_get_domain_facts(arguments: Dict[str, Any]) -> Dict[str, Any]:
+    def _tool_get_domain_facts(self, arguments: Dict[str, Any]) -> Dict[str, Any]:
+        if self.knowledge_policy == "sample_only":
+            return {"available": False, "reason": "Benchmark uses supplied sample material only."}
         ticket_type = str(arguments["ticket_type"])
         facts = get_domain_facts(ticket_type)
         return (
@@ -345,6 +348,8 @@ class TestCaseOrchestrator:
         return context.model_dump()
 
     def _retrieve(self, query: str, project_id: str = "") -> KnowledgeContext:
+        if self.knowledge_policy == "sample_only":
+            return KnowledgeContext(query=query)
         with self.tracer.span(
             "rag.retrieve",
             kind="rag",
@@ -518,6 +523,7 @@ class TestCaseOrchestrator:
         execution: str = "workflow",
         human_policy: str = "pause",
         max_steps: int = 12,
+        llm_options: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         with self.tracer.span(
             "benchmark.run",
@@ -536,8 +542,8 @@ class TestCaseOrchestrator:
                 limit,
                 split,
                 mode,
-                lambda root: TestCaseOrchestrator(JsonStore(root)),
-                execution=execution, human_policy=human_policy, max_steps=max_steps,
+                lambda root: TestCaseOrchestrator(JsonStore(root), knowledge_policy="sample_only"),
+                execution=execution, human_policy=human_policy, max_steps=max_steps, llm_options=llm_options,
             )
             if span:
                 span.output_summary = "{} score={} samples={}".format(

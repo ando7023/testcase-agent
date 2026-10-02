@@ -5,7 +5,8 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
-from contextlib import nullcontext
+from contextlib import contextmanager, nullcontext
+from contextvars import ContextVar
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
@@ -59,6 +60,8 @@ class OpenAICompatibleClient:
         self.stream_json = os.getenv("LLM_STREAM_JSON", "").lower() in {"1", "true", "yes"}
         self.on_stream_progress = None
         self.on_json_response = None
+        self._diagnostic_context = ContextVar("llm_diagnostics", default=None)
+        self._started_context = ContextVar("llm_request_started", default=0.0)
         self.reasoning_effort = os.getenv("LLM_REASONING_EFFORT", "")
         self.temperature = float(os.getenv("LLM_TEMPERATURE", "0.2"))
         top_p = os.getenv("LLM_TOP_P", "").strip()
@@ -76,6 +79,50 @@ class OpenAICompatibleClient:
     @property
     def enabled(self) -> bool:
         return bool(self.api_key) and not self.disabled
+
+    @property
+    def last_call_diagnostics(self):
+        return self._diagnostic_context.get() or {}
+
+    @last_call_diagnostics.setter
+    def last_call_diagnostics(self, value):
+        self._diagnostic_context.set(value)
+
+    def effective_settings(self):
+        return {"model": self.model, "stream": self.stream_json, "reasoning_effort": self.reasoning_effort,
+                "timeout_seconds": self.timeout, "max_tokens": self.max_tokens,
+                "temperature": self.temperature, "top_p": self.top_p,
+                "thinking_enabled": self.thinking_enabled or (self.is_bigmodel and self.model.lower() in
+                    {"glm-5.3", "glm-5.3-flash", "glm-5.3-flashx"})}
+
+    @contextmanager
+    def _diagnostics(self, span, stream):
+        self._started_context.set(time.perf_counter())
+        self.last_call_diagnostics = {"stream": stream, "phase": "awaiting_headers",
+            "connected_ms": None, "first_event_ms": None, "first_content_ms": None,
+            "last_receive_ms": None, "event_count": 0, "reasoning_chars": 0, "content_chars": 0}
+        try:
+            yield
+            self.last_call_diagnostics["phase"] = "complete"
+        except LLMError as exc:
+            self.last_call_diagnostics["error_code"] = exc.code
+            raise
+        finally:
+            self.last_call_diagnostics["elapsed_ms"] = self._elapsed_ms()
+            if span:
+                span.attributes.update(self.effective_settings())
+                span.attributes.update(self.last_call_diagnostics)
+
+    def _elapsed_ms(self):
+        return round((time.perf_counter() - self._started_context.get()) * 1000)
+
+    def _received(self, event=False, content=False):
+        diagnostics = self.last_call_diagnostics
+        diagnostics["last_receive_ms"] = self._elapsed_ms()
+        for flag, key in ((event, "first_event_ms"), (content, "first_content_ms")):
+            if flag and diagnostics[key] is None:
+                diagnostics[key] = diagnostics["last_receive_ms"]
+        diagnostics["phase"] = "receiving"
 
     def _chat_body(self, system_prompt, user_prompt, schema=None, stream=False):
         if not self.enabled:
@@ -126,9 +173,8 @@ class OpenAICompatibleClient:
             },
             input_value={"system": system_prompt, "user": user_prompt},
         ) as span:
-            result, usage = self._generate_json_impl(
-                system_prompt, user_prompt, schema
-            )
+            with self._diagnostics(span, False):
+                result, usage = self._generate_json_impl(system_prompt, user_prompt, schema)
             if span:
                 span.output_summary = json.dumps(
                     result, ensure_ascii=False, default=str
@@ -178,9 +224,9 @@ class OpenAICompatibleClient:
             input_value={"system": system_prompt, "user": user_prompt},
         ) as span:
             metadata = {}
-            result, content, first_token_ms = self._generate_json_stream_impl(
-                system_prompt, user_prompt, schema, on_delta, metadata
-            )
+            with self._diagnostics(span, True):
+                result, content, first_token_ms = self._generate_json_stream_impl(
+                    system_prompt, user_prompt, schema, on_delta, metadata)
             if span:
                 span.output_summary = content[:2000]
                 span.usage = self._usage(
@@ -220,12 +266,16 @@ class OpenAICompatibleClient:
         def progress(phase):
             if self.on_stream_progress:
                 self.on_stream_progress({"phase": phase, "seconds": round(time.perf_counter() - request_started, 2),
+                                         **{key: self.last_call_diagnostics.get(key) for key in
+                                            ("connected_ms", "first_event_ms", "first_content_ms", "last_receive_ms")},
                                          **{key: metadata[key] for key in ("event_count", "reasoning_chars", "content_chars")}})
 
         try:
             with urllib.request.urlopen(request, timeout=self.timeout) as response:
+                self.last_call_diagnostics.update(connected_ms=self._elapsed_ms(), phase="awaiting_first_event")
                 progress("connected")
                 for raw_line in response:
+                    self._received()
                     line = raw_line.decode("utf-8", errors="replace").strip()
                     if not line.startswith("data:"):
                         continue
@@ -235,9 +285,11 @@ class OpenAICompatibleClient:
                         break
                     try:
                         event = json.loads(data)
+                        self._received(event=True)
                         if event.get("error"):
                             raise LLMError("LLM stream returned an error event")
                         metadata["event_count"] += 1
+                        self.last_call_diagnostics["event_count"] = metadata["event_count"]
                         if event.get("usage"):
                             metadata["usage"] = event["usage"]
                         choices = event.get("choices") or []
@@ -250,9 +302,12 @@ class OpenAICompatibleClient:
                         content = delta.get("content") or ""
                         metadata["reasoning_chars"] += len(delta.get("reasoning_content") or "")
                         metadata["content_chars"] += len(content)
+                        self.last_call_diagnostics.update({key: metadata[key] for key in
+                            ("event_count", "reasoning_chars", "content_chars")})
                     except (KeyError, IndexError, TypeError, ValueError):
                         continue
                     if content:
+                        self._received(content=True)
                         if not first_token_ms:
                             first_token_ms = int(
                                 (time.perf_counter() - request_started) * 1000
@@ -271,6 +326,8 @@ class OpenAICompatibleClient:
             raise LLMError("LLM stream read timed out (timeout={}s); events={}, reasoning_chars={}, content_chars={}".format(
                 self.timeout, metadata["event_count"], metadata["reasoning_chars"], metadata["content_chars"]), code="timeout") from exc
         except (urllib.error.URLError, ValueError) as exc:
+            if isinstance(getattr(exc, "reason", None), TimeoutError):
+                raise LLMError("LLM connection timed out", code="timeout") from exc
             raise LLMError("LLM request failed: {}".format(exc))
         if finish_reason and finish_reason != "stop":
             raise LLMError("LLM stream ended without a complete answer: finish_reason={}".format(finish_reason),
@@ -279,6 +336,7 @@ class OpenAICompatibleClient:
             raise LLMError("LLM stream disconnected before completion", code="incomplete_response")
         progress("complete")
         try:
+            self.last_call_diagnostics["phase"] = "parsing"
             content = "".join(fragments)
             if self.on_json_response:
                 self.on_json_response(content)
@@ -363,15 +421,33 @@ class OpenAICompatibleClient:
             with urllib.request.urlopen(
                 request, timeout=self.timeout
             ) as response:
-                return json.loads(response.read().decode("utf-8"))
+                # Non-stream responses have no token events; record received
+                # body chunks without pretending they are generated tokens.
+                tracked = bool(self.last_call_diagnostics) and endpoint == "/chat/completions"
+                if tracked:
+                    self.last_call_diagnostics.update(connected_ms=self._elapsed_ms(), phase="awaiting_body")
+                chunks = []
+                read = getattr(response, "read1", response.read)
+                while True:
+                    chunk = read(65536)
+                    if not chunk:
+                        break
+                    chunks.append(chunk)
+                    if tracked:
+                        self._received()
+                if tracked:
+                    self.last_call_diagnostics["phase"] = "parsing"
+                return json.loads(b"".join(chunks).decode("utf-8"))
         except urllib.error.HTTPError as exc:
             detail = exc.read().decode("utf-8", errors="replace")[:1000]
             raise LLMError(
                 "LLM request failed with HTTP {}: {}".format(exc.code, detail)
             )
         except TimeoutError as exc:
-            raise LLMError("LLM read timed out (timeout={}s)".format(self.timeout)) from exc
+            raise LLMError("LLM read timed out (timeout={}s)".format(self.timeout), code="timeout") from exc
         except (urllib.error.URLError, ValueError) as exc:
+            if isinstance(getattr(exc, "reason", None), TimeoutError):
+                raise LLMError("LLM connection timed out", code="timeout") from exc
             raise LLMError("LLM request failed: {}".format(exc))
 
     @staticmethod
