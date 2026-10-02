@@ -62,6 +62,8 @@ python tests/run_offline.py
 
 内置 `EQUIPMENT-BASELINE-V1` 和 `EQUIPMENT-RAG-V1` 是合成回归样例；它们验证代码行为，不是外部权威评测。公开 Benchmark 适配器按需下载外部数据，并记录来源与许可；数据不随仓库发布。
 
+公开评测入口支持 EBT / StorySeek 的 Workflow 与 Agentic 对比，每个样本隔离运行。默认保留人工确认暂停；批量闭环需显式选择模拟确认。报告分开记录流程完成、质量门禁、技术失败与降级，不再给出混合综合分。套件边界、指标口径及 API 示例见 [公开评测说明](docs/benchmarks.md)。
+
 真实模型的优惠券 smoke test 需主动执行：
 
 ```powershell

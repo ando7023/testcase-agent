@@ -515,6 +515,9 @@ class TestCaseOrchestrator:
         limit: int = 3,
         split: str = "test",
         mode: str = "offline",
+        execution: str = "workflow",
+        human_policy: str = "pause",
+        max_steps: int = 12,
     ) -> Dict[str, Any]:
         with self.tracer.span(
             "benchmark.run",
@@ -524,6 +527,8 @@ class TestCaseOrchestrator:
                 "limit": limit,
                 "split": split,
                 "mode": mode,
+                "execution": execution,
+                "human_policy": human_policy,
             },
         ) as span:
             report = self.public_benchmarks.run(
@@ -532,6 +537,7 @@ class TestCaseOrchestrator:
                 split,
                 mode,
                 lambda root: TestCaseOrchestrator(JsonStore(root)),
+                execution=execution, human_policy=human_policy, max_steps=max_steps,
             )
             if span:
                 span.output_summary = "{} score={} samples={}".format(

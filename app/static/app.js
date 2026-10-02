@@ -380,6 +380,13 @@ $('#benchmark-toggle').addEventListener('click', () => {
 $('#benchmark-close').addEventListener('click', () => $('#benchmark-panel').classList.remove('open'));
 
 const benchmarkLabels = {
+  flow_completion_rate: '流程完成率',
+  quality_pass_rate: '质量门禁通过率（适用样本）',
+  quality_assessed_count: '质量已评定样本数',
+  quality_applicable_count: '质量门禁适用样本数',
+  technical_failure_rate: '技术失败率',
+  degraded_rate: '降级率',
+  baseline_finding_count: '基线评审发现数（非误报率）',
   task_success_rate: '任务成功率',
   linked_test_recall: '关联测试召回',
   mean_gold_token_recall: '黄金用例词元召回',
@@ -435,6 +442,7 @@ function renderBenchmarkDatasets(datasets) {
 }
 
 function benchmarkMetricValue(key, value) {
+  if (value === null || value === undefined) return '未评定';
   if (key.endsWith('_count')) return Number(value).toFixed(0);
   return `${(Number(value) * 100).toFixed(1)}%`;
 }
@@ -442,16 +450,19 @@ function benchmarkMetricValue(key, value) {
 function renderBenchmarkReport(report) {
   const metrics = Object.entries(report.metrics || {}).map(([key, value]) => `
     <div><strong>${benchmarkMetricValue(key, value)}</strong><span>${escapeHtml(benchmarkLabels[key] || key)}</span></div>`).join('');
-  const samples = (report.samples || []).slice(0, 6).map(sample => {
+  const samples = (report.samples || []).map(sample => {
     const details = Object.entries(sample)
       .filter(([key, value]) => !['id', 'status', 'error', 'project'].includes(key) && (typeof value === 'number' || typeof value === 'boolean'))
       .slice(0, 3)
       .map(([key, value]) => `${benchmarkLabels[key] || key} ${typeof value === 'boolean' ? (value ? '是' : '否') : (value <= 1 ? `${(value * 100).toFixed(0)}%` : value)}`)
       .join(' · ');
-    return `<div class="benchmark-sample"><strong>${escapeHtml(sample.id)}</strong><span>${escapeHtml(sample.status)}${details ? ` · ${escapeHtml(details)}` : ''}</span>${sample.error ? `<small>${escapeHtml(sample.error)}</small>` : ''}</div>`;
+    const outcomes = report.schema_version === 2
+      ? `流程 ${sample.flow_completed ? '完成' : '未完成'} · 质量门禁 ${sample.quality_passed === null ? '未评定' : sample.quality_passed ? '通过' : '未通过'} · 技术失败 ${sample.technical_failure ? '是' : '否'} · 降级 ${sample.degraded ? '是' : '否'}` : details;
+    return `<div class="benchmark-sample"><strong>${escapeHtml(sample.id)}</strong><span>${escapeHtml(sample.status)} · ${escapeHtml(outcomes)}</span>${sample.question ? `<small>${escapeHtml(sample.question)}</small>` : ''}${sample.error || sample.error_code ? `<small>${escapeHtml(sample.error || sample.error_code)}</small>` : ''}${sample.run_id ? `<small>运行 ${escapeHtml(sample.run_id)} · ${sample.steps} 步 · ${escapeHtml(sample.run_status)}</small>` : ''}</div>`;
   }).join('');
   $('#benchmark-result').innerHTML = `
-    <div class="benchmark-score"><strong>${Number(report.score || 0)}</strong><span>${escapeHtml(report.dataset_id)}<br>${report.sample_count || 0} samples · ${escapeHtml(report.mode || 'offline')}</span></div>
+    <div class="benchmark-score ${report.schema_version === 2 ? 'benchmark-score-v2' : ''}"><strong>${report.schema_version === 2 ? '分项' : Number(report.score || 0)}</strong><span>${escapeHtml(report.dataset_id)}<br>${report.sample_count || 0} samples · ${escapeHtml(report.mode || 'offline')} · ${escapeHtml(report.execution || '旧版固定流程')} · ${escapeHtml(report.status || '')}</span></div>
+    <p class="benchmark-lead">${report.schema_version === 2 ? `${report.mode === 'offline' ? '离线规则回归，不代表模型能力。' : '模型评测；质量通过仅代表内部门禁，不代表独立业务验收。'} ${report.human_policy === 'simulate_confirm' ? '已选择模拟模块确认，不自动回答业务澄清或追加预算。' : '保留人工确认暂停。'} ${escapeHtml(report.metric_notes || '')}` : '旧版报告：综合分、passed 和成功率沿用旧口径，不能作为完整 Agentic 质量结论。'}</p>
     <div class="benchmark-metrics">${metrics}</div>
     ${samples ? `<details class="benchmark-samples"><summary>查看样本明细</summary>${samples}</details>` : ''}`;
 }
@@ -460,7 +471,7 @@ function renderBenchmarkReports(reports) {
   $('#benchmark-reports').innerHTML = reports.map(report => `
     <button class="benchmark-report" type="button" data-report-id="${escapeHtml(report.report_id)}">
       <span><strong>${escapeHtml(report.dataset_id)}</strong><small>${escapeHtml(report.created_at || '')} · ${escapeHtml(report.mode || '')}</small></span>
-      <b>${Number(report.score || 0)}</b>
+      <b>${report.schema_version === 2 ? escapeHtml(report.execution || 'workflow') : '旧版 ' + Number(report.score || 0)}</b>
     </button>`).join('') || '<p class="benchmark-empty">运行一次评测后，报告会保存在这里。</p>';
   document.querySelectorAll('.benchmark-report').forEach(button => button.addEventListener('click', async () => {
     try {
@@ -478,10 +489,29 @@ async function loadBenchmarks() {
     $('#benchmark-suite').innerHTML = (catalog.suites || []).map(suite => `<option value="${escapeHtml(suite.id)}">${escapeHtml(suite.label)} · ${escapeHtml(suite.dataset_id)}</option>`).join('');
     if ((catalog.suites || []).some(suite => suite.id === selectedSuite)) $('#benchmark-suite').value = selectedSuite;
     renderBenchmarkReports(catalog.reports || []);
+    updateBenchmarkOptions();
   } catch (error) {
     $('#benchmark-datasets').innerHTML = `<p class="benchmark-empty">${escapeHtml(error.message)}</p>`;
   }
 }
+
+function updateBenchmarkOptions() {
+  const suite = (state.benchmarkCatalog?.suites || []).find(s => s.id === $('#benchmark-suite').value);
+  const allowsAgentic = (suite?.executions || []).includes('agentic');
+  $('#benchmark-execution').querySelector('[value="agentic"]').disabled = !allowsAgentic;
+  if (!allowsAgentic) $('#benchmark-execution').value = 'workflow';
+  $('#benchmark-human-policy').disabled = suite?.id !== 'ebt_generation';
+  $('#benchmark-max-steps').disabled = $('#benchmark-execution').value !== 'agentic';
+  $('#benchmark-split').disabled = suite?.id !== 'storyseek_pipeline';
+  $('#benchmark-limit').disabled = suite?.id === 'critic_mutation';
+  $('#benchmark-execution-note').textContent = suite?.id === 'critic_mutation'
+    ? '固定运行 4 个结构缺陷样本和 1 个基线；真实模式会调用模型评审。'
+    : suite?.id === 'storyseek_pipeline' ? '评测止于需求理解和模块规划；等待模块确认是该子任务的正常终点。'
+    : suite?.id === 'srs_document' ? '文档解析专项，不经过 Supervisor。'
+    : 'Agentic 使用真实 Supervisor；每个样本独立运行，不自动追加预算。';
+}
+$('#benchmark-suite').addEventListener('change', updateBenchmarkOptions);
+$('#benchmark-execution').addEventListener('change', updateBenchmarkOptions);
 
 $('#benchmark-form').addEventListener('submit', async event => {
   event.preventDefault();
@@ -493,6 +523,9 @@ $('#benchmark-form').addEventListener('submit', async event => {
       split: $('#benchmark-split').value,
       limit: Number($('#benchmark-limit').value),
       mode,
+      execution: $('#benchmark-execution').value,
+      human_policy: $('#benchmark-human-policy').disabled ? 'pause' : $('#benchmark-human-policy').value,
+      max_steps: Number($('#benchmark-max-steps').value),
     })});
     renderBenchmarkReport(report);
     await loadBenchmarks();

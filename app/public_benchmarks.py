@@ -14,6 +14,7 @@ from statistics import mean
 from typing import Any, Callable, Dict, Iterable, List, Optional
 
 from .ebt_dataset import EBTRepository
+from .benchmark_execution import BenchmarkExecution
 from .models import (
     AtomicRequirement,
     ModuleTree,
@@ -357,17 +358,17 @@ class PublicBenchmarkService:
             "datasets": [ebt, self.storyseek.status(), self.srs.status(), {
                 "dataset_id": CRITIC_DATASET_ID,
                 "name": "Programmatic critic mutation benchmark",
-                "ready": self.ebt.ready,
-                "source": "Derived from EBT without modifying source data",
+                "ready": True,
+                "source": "Local structural mutations; optional EBT requirement text",
                 "license": "derived-evaluation",
                 "purpose": ["quality_critic"],
-                "sample_count": 4,
+                "sample_count": 5,
             }],
             "suites": [
-                {"id": "ebt_generation", "dataset_id": "EBT-RAG-V1", "label": "EBT 用例生成"},
-                {"id": "storyseek_pipeline", "dataset_id": STORYSEEK_DATASET_ID, "label": "StorySeek 需求与模块"},
-                {"id": "srs_document", "dataset_id": SRS_DATASET_ID, "label": "SRS 文档解析"},
-                {"id": "critic_mutation", "dataset_id": CRITIC_DATASET_ID, "label": "Critic 缺陷检测"},
+                {"id": "ebt_generation", "dataset_id": "EBT-RAG-V1", "label": "EBT 用例生成", "executions": ["workflow", "agentic"]},
+                {"id": "storyseek_pipeline", "dataset_id": STORYSEEK_DATASET_ID, "label": "StorySeek 需求与模块", "executions": ["workflow", "agentic"]},
+                {"id": "srs_document", "dataset_id": SRS_DATASET_ID, "label": "SRS 文档解析", "executions": ["workflow"]},
+                {"id": "critic_mutation", "dataset_id": CRITIC_DATASET_ID, "label": "Critic 缺陷检测", "executions": ["workflow"]},
             ],
             "reports": self.list_reports(limit=20),
         }
@@ -393,7 +394,7 @@ class PublicBenchmarkService:
             reports.append({
                 key: payload.get(key)
                 for key in (
-                    "report_id", "suite", "dataset_id", "mode", "status",
+                    "report_id", "suite", "dataset_id", "mode", "status", "schema_version", "execution", "human_policy",
                     "score", "sample_count", "created_at", "metrics",
                 )
             })
@@ -412,22 +413,29 @@ class PublicBenchmarkService:
         split: str,
         mode: str,
         pipeline_factory: Callable[[Path], Any],
+        execution: str = "workflow",
+        human_policy: str = "pause",
+        max_steps: int = 12,
     ) -> Dict[str, Any]:
         limit = max(1, min(20, int(limit)))
         if mode not in {"offline", "live"}:
             raise ValueError("Benchmark mode must be offline or live")
+        if execution not in {"workflow", "agentic"} or human_policy not in {"pause", "simulate_confirm"}:
+            raise ValueError("Invalid benchmark execution or human policy")
+        if type(max_steps) is not int or not 1 <= max_steps <= 20:
+            raise ValueError("Agentic max_steps must be an integer from 1 to 20")
+        if execution == "agentic" and suite not in {"ebt_generation", "storyseek_pipeline"}:
+            raise ValueError("This component suite does not support Agentic execution")
         report_id = "BR-" + uuid.uuid4().hex[:12]
         workspace = self.data_root / "benchmark_runs" / report_id
-        pipeline = pipeline_factory(workspace)
-        if mode == "offline":
-            pipeline.llm.api_key = ""
+        runner = BenchmarkExecution(workspace, pipeline_factory, mode, execution, human_policy, max_steps)
         runners = {
-            "ebt_generation": lambda: self._run_ebt(pipeline, limit),
+            "ebt_generation": lambda: self._run_ebt(runner, limit),
             "storyseek_pipeline": lambda: self._run_storyseek(
-                pipeline, limit, split
+                runner, limit, split
             ),
-            "srs_document": lambda: self._run_srs(pipeline, limit, mode),
-            "critic_mutation": lambda: self._run_critic(pipeline),
+            "srs_document": lambda: self._run_srs(runner, limit, mode),
+            "critic_mutation": lambda: self._run_critic(runner),
         }
         if suite not in runners:
             raise ValueError("Unknown benchmark suite: {}".format(suite))
@@ -436,7 +444,12 @@ class PublicBenchmarkService:
             "report_id": report_id,
             "suite": suite,
             "mode": mode,
-            "status": "completed",
+            "schema_version": 2,
+            "execution": execution,
+            "human_policy": human_policy,
+            "max_steps": max_steps if execution == "agentic" else None,
+            "split": split if suite == "storyseek_pipeline" else "not_applicable",
+            "workspace": str(workspace.relative_to(self.data_root)),
             "created_at": utc_now(),
         })
         atomic_write(
@@ -445,7 +458,7 @@ class PublicBenchmarkService:
         )
         return payload
 
-    def _run_ebt(self, pipeline: Any, limit: int) -> Dict[str, Any]:
+    def _run_ebt(self, runner: BenchmarkExecution, limit: int) -> Dict[str, Any]:
         if not self.ebt.ready:
             raise ValueError("Import EBT before running this suite")
         artifacts, traces = self.ebt.load()
@@ -462,16 +475,9 @@ class PublicBenchmarkService:
                 for test_id in links[requirement_id]
                 if test_id in artifacts
             ]
-            try:
-                project = pipeline.store.create_project(
-                    "EBT requirement {}".format(requirement_id), requirement
-                )
-                project = pipeline.analyze(project)
-                project = pipeline.plan_modules(project)
-                project.module_tree.confirmed = True
-                pipeline.store.save_project(project)
-                project = pipeline.generate_cases(project)
-                project = pipeline.review(project)
+            def evaluate(pipeline):
+                outcome = runner.pipeline(pipeline, "EBT requirement {}".format(requirement_id), requirement)
+                project = outcome["_project"]
                 generated = "\n".join(
                     case.title + "\n" + "\n".join(
                         step.action + " " + step.expected for step in case.steps
@@ -479,9 +485,7 @@ class PublicBenchmarkService:
                     for case in project.cases
                 )
                 overlaps = [token_recall(test, generated) for test in gold_tests]
-                samples.append({
-                    "id": requirement_id,
-                    "status": "passed",
+                outcome.update({
                     "gold_test_count": len(gold_tests),
                     "generated_case_count": len(project.cases),
                     "linked_test_recall": average(
@@ -498,21 +502,19 @@ class PublicBenchmarkService:
                     ),
                     "critic_score": project.review.score if project.review else 0,
                 })
-            except Exception as exc:
-                samples.append({"id": requirement_id, "status": "failed", "error": str(exc)[:500]})
-        passed = [item for item in samples if item["status"] == "passed"]
+                return outcome
+            samples.append(runner.sample(requirement_id, evaluate))
+        measured = [item for item in samples if "generated_case_count" in item]
         metrics = {
-            "task_success_rate": average(1.0 if item["status"] == "passed" else 0.0 for item in samples),
-            "linked_test_recall": average(item["linked_test_recall"] for item in passed),
-            "mean_gold_token_recall": average(item["mean_gold_token_recall"] for item in passed),
-            "traceability_ratio": average(item["traceability_ratio"] for item in passed),
-            "assertion_ratio": average(item["assertion_ratio"] for item in passed),
-            "critic_score": average(item["critic_score"] / 100.0 for item in passed),
+            key: average(item.get(key, 0) for item in samples)
+            for key in ("linked_test_recall", "mean_gold_token_recall", "traceability_ratio", "assertion_ratio")
         }
-        return self._report("EBT-RAG-V1", samples, metrics)
+        return self._report("EBT-RAG-V1", samples, metrics, {
+            "measured_count": len(measured),
+            "metric_notes": "词汇召回和非空断言仅为代理指标；quality_passed 是内部评审门禁，不是独立业务验收。"})
 
     def _run_storyseek(
-        self, pipeline: Any, limit: int, split: str
+        self, runner: BenchmarkExecution, limit: int, split: str
     ) -> Dict[str, Any]:
         records = self.storyseek.load(split=split, limit=limit)
         samples = []
@@ -526,46 +528,37 @@ class PublicBenchmarkService:
                     ),
                 ) if part.strip(" :")
             )
-            try:
-                project = pipeline.store.create_project(
-                    "StorySeek {}".format(record["id"]), requirement
-                )
-                project = pipeline.analyze(project)
-                project = pipeline.plan_modules(project)
-                analysis_text = project.analysis.model_dump_json()
-                module_text = project.module_tree.model_dump_json()
+            def evaluate(pipeline):
+                outcome = runner.pipeline(pipeline, "StorySeek {}".format(record["id"]), requirement, target="modules")
+                project = outcome["_project"]
+                analysis_text = project.analysis.model_dump_json() if project.analysis else ""
+                module_text = project.module_tree.model_dump_json() if project.module_tree else ""
                 actor_tokens = tokenize(record["actor"])
-                actual_actor_tokens = tokenize(" ".join(project.analysis.actors))
-                samples.append({
-                    "id": record["id"],
+                actual_actor_tokens = tokenize(" ".join(project.analysis.actors)) if project.analysis else set()
+                outcome.update({
                     "project": record["project"],
-                    "status": "passed",
                     "actor_accuracy": 1.0 if actor_tokens and actor_tokens <= actual_actor_tokens else 0.0,
                     "action_recall": token_recall(record["action"], analysis_text),
                     "outcome_recall": token_recall(record["expected_outcome"], analysis_text),
                     "goal_recall": token_recall(record["goal"], analysis_text),
                     "deliverable_module_recall": token_recall(record["deliverable"], module_text),
-                    "module_count": len(project.module_tree.modules),
+                    "module_count": len(project.module_tree.modules) if project.module_tree else 0,
                 })
-            except Exception as exc:
-                samples.append({"id": record["id"], "status": "failed", "error": str(exc)[:500]})
-        passed = [item for item in samples if item["status"] == "passed"]
+                return outcome
+            samples.append(runner.sample(record["id"], evaluate))
         metrics = {
-            "task_success_rate": average(1.0 if item["status"] == "passed" else 0.0 for item in samples),
-            "actor_accuracy": average(item["actor_accuracy"] for item in passed),
-            "action_recall": average(item["action_recall"] for item in passed),
-            "outcome_recall": average(item["outcome_recall"] for item in passed),
-            "goal_recall": average(item["goal_recall"] for item in passed),
-            "deliverable_module_recall": average(item["deliverable_module_recall"] for item in passed),
+            key: average(item.get(key, 0) for item in samples)
+            for key in ("actor_accuracy", "action_recall", "outcome_recall", "goal_recall", "deliverable_module_recall")
         }
-        return self._report(STORYSEEK_DATASET_ID, samples, metrics, {"split": split})
+        return self._report(STORYSEEK_DATASET_ID, samples, metrics, {
+            "split": split, "metric_notes": "目标止于模块规划；输入包含用户故事字段，词汇召回仅衡量信息保留，不是隐藏答案推理。"})
 
-    def _run_srs(self, pipeline: Any, limit: int, mode: str) -> Dict[str, Any]:
+    def _run_srs(self, runner: BenchmarkExecution, limit: int, mode: str) -> Dict[str, Any]:
         if not self.srs.ready:
             raise ValueError("Import the public SRS dataset before running this suite")
         samples = []
         for pair in self.srs.pairs(limit=limit):
-            try:
+            def evaluate(pipeline):
                 source = Path(pair["source_path"])
                 gold = Path(pair["gold_path"]).read_text(
                     encoding="utf-8", errors="replace"
@@ -579,9 +572,12 @@ class PublicBenchmarkService:
                     relevant = Path(pair["relevant_path"]).read_text(
                         encoding="utf-8", errors="replace"
                     )
-                samples.append({
-                    "id": pair["id"],
-                    "status": "passed",
+                if not document.raw_text.strip() or not document.normalized_text.strip():
+                    raise ValueError("Document extraction produced no text")
+                return {
+                    "flow_completed": True,
+                    "quality_passed": None,
+                    "quality_basis": "not_assessed_document_metrics_only",
                     "format": source.suffix.lower(),
                     "extraction_recall": token_recall(gold, document.raw_text),
                     "relevant_recall": token_recall(relevant, document.normalized_text) if relevant else None,
@@ -589,21 +585,19 @@ class PublicBenchmarkService:
                         len(document.normalized_text) / float(max(1, len(document.raw_text))), 4
                     ),
                     "warning_count": len(document.warnings),
-                })
-            except Exception as exc:
-                samples.append({"id": pair["id"], "status": "failed", "error": str(exc)[:500]})
-        passed = [item for item in samples if item["status"] == "passed"]
+                }
+            samples.append(runner.sample(pair["id"], evaluate, quality_applicable=False))
+        passed = [item for item in samples if item["flow_completed"]]
         relevant = [item for item in passed if item["relevant_recall"] is not None]
         metrics = {
-            "task_success_rate": average(1.0 if item["status"] == "passed" else 0.0 for item in samples),
-            "extraction_recall": average(item["extraction_recall"] for item in passed),
+            "extraction_recall": average(item.get("extraction_recall", 0) for item in samples),
             "relevant_recall": average(item["relevant_recall"] for item in relevant),
             "compression_ratio": average(item["compression_ratio"] for item in passed),
             "warning_rate": average(1.0 if item["warning_count"] else 0.0 for item in passed),
         }
         return self._report(SRS_DATASET_ID, samples, metrics)
 
-    def _run_critic(self, pipeline: Any) -> Dict[str, Any]:
+    def _run_critic(self, runner: BenchmarkExecution) -> Dict[str, Any]:
         requirement_text = "A registered user submits a request and receives a visible result."
         if self.ebt.ready:
             artifacts, traces = self.ebt.load()
@@ -648,23 +642,30 @@ class PublicBenchmarkService:
         ))
         mutations.append(("empty_module", base_analysis, empty_tree, deepcopy(base_cases), "module_coverage"))
 
-        clean_result = self._critic_review(pipeline, base_analysis, base_tree, base_cases)
-        for name, analysis, tree, cases, expected in mutations:
-            result = self._critic_review(pipeline, analysis, tree, cases)
-            categories = {item["category"] for item in result["review"]["findings"]}
-            scenarios.append({
-                "id": name,
-                "status": "passed",
-                "expected_category": expected,
-                "detected": expected in categories,
-                "detected_categories": sorted(categories),
-            })
+        fixtures = [("baseline", base_analysis, base_tree, base_cases, None)] + mutations
+        for name, analysis, tree, cases, expected in fixtures:
+            def evaluate(pipeline):
+                result, trace = self._critic_review(pipeline, analysis, tree, cases, runner.mode)
+                findings = result["review"]["findings"]
+                categories = {item["category"] for item in findings}
+                incomplete = "review_incomplete" in categories
+                return {"flow_completed": True, "technical_failure": incomplete,
+                        "quality_passed": expected in categories if expected and not incomplete else None,
+                        "quality_basis": "injected_structural_defect_detection" if expected else "baseline_observation",
+                        "expected_category": expected, "detected": expected in categories if expected else None,
+                        "detected_categories": sorted(categories), "finding_count": len(findings),
+                        "error_code": "review_incomplete" if incomplete else "",
+                        "semantic_review_complete": runner.mode == "live" and trace.mode == "llm" and not incomplete,
+                        "_worker_modes": [trace.mode]}
+            scenarios.append(runner.sample(name, evaluate, quality_applicable=expected is not None))
+        mutations = [s for s in scenarios if s["id"] != "baseline"]
+        baseline = scenarios[0]
         metrics = {
-            "defect_detection_recall": average(1.0 if item["detected"] else 0.0 for item in scenarios),
-            "clean_false_positive_count": float(len(clean_result["review"]["findings"])),
-            "clean_pass_rate": 1.0 if not clean_result["review"]["findings"] else 0.0,
+            "defect_detection_recall": average(1.0 if item.get("detected") and not item["technical_failure"] and not item["degraded"] else 0.0 for item in mutations),
+            "baseline_finding_count": baseline.get("finding_count"),
         }
-        return self._report(CRITIC_DATASET_ID, scenarios, metrics)
+        return self._report(CRITIC_DATASET_ID, scenarios, metrics, {
+            "metric_notes": "四种结构缺陷与一个基线，共五个固定样本，不使用样本数/划分参数。基线未做人工语义标注，其 findings 不计为误报率；缺陷召回不等于语义评审准确率。"})
 
     @staticmethod
     def _critic_review(
@@ -672,18 +673,19 @@ class PublicBenchmarkService:
         analysis: RequirementAnalysis,
         tree: ModuleTree,
         cases: List[TestCase],
-    ) -> Dict[str, Any]:
-        result, _ = pipeline.harness.execute(
+        mode: str = "offline",
+    ):
+        return pipeline.harness.execute(
             pipeline.quality_agent,
             {
                 "target": "case",
+                "requirement": analysis.summary,
                 "analysis": analysis.model_dump(),
                 "module_tree": tree.model_dump(),
                 "cases": [case.model_dump() for case in cases],
             },
-            {"force_demo": True},
+            {"force_demo": mode == "offline"},
         )
-        return result
 
     @staticmethod
     def _report(
@@ -692,17 +694,23 @@ class PublicBenchmarkService:
         metrics: Dict[str, float],
         extra: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
-        score_metrics = [
-            value for key, value in metrics.items()
-            if 0.0 <= value <= 1.0
-            and not key.endswith("_count")
-            and key not in {"compression_ratio", "warning_rate"}
-        ]
+        assessed = [s for s in samples if s.get("quality_passed") is not None]
+        applicable = [s for s in samples if s.get("quality_applicable", True)]
+        metrics.update({
+            "flow_completion_rate": average(float(s["flow_completed"]) for s in samples),
+            "quality_pass_rate": average(float(s.get("quality_passed") is True) for s in applicable) if assessed else None,
+            "quality_applicable_count": len(applicable),
+            "quality_assessed_count": len(assessed),
+            "technical_failure_rate": average(float(s["technical_failure"]) for s in samples),
+            "degraded_rate": average(float(s["degraded"]) for s in samples),
+        })
         payload = {
             "dataset_id": dataset_id,
             "sample_count": len(samples),
-            "score": round(100 * mean(score_metrics)) if score_metrics else 0,
-            "metrics": {key: round(value, 4) for key, value in metrics.items()},
+            "score": None,  # Heterogeneous proxies must not become a quality score.
+            "status": ("empty" if not samples else "completed_with_errors" if any(s["technical_failure"] for s in samples)
+                       else "incomplete" if any(not s["flow_completed"] for s in samples) else "completed"),
+            "metrics": {key: round(value, 4) if value is not None else None for key, value in metrics.items()},
             "samples": samples,
         }
         payload.update(extra or {})

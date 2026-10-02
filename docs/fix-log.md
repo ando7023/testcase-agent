@@ -275,6 +275,15 @@
 - **页面验证**：隔离临时目录下验证创建快照、前后对比、事实回滚形成新版本、项目恢复生成自动备份，以及从备份撤销恢复。最新页面控制台无 error/warn。证据：[差异页面](../.local-private/memory-versions-ui.png)、[事实回滚成功](../.local-private/memory-rollback-success.png)、[项目恢复成功](../.local-private/memory-project-restore-success.png)。UI 验证过程发现事实视图的隐藏保存栏被 CSS 覆盖，已修正并刷新核验。测试脚本与截图沿用本地忽略规则，不随公开仓库上传。
 - **状态与边界**：代码修复及离线/浏览器回归通过；没有真实模型调用，没有修改原优惠券运行数据，不把本轮验证记为模型实测或业务接口执行成功。项目完整快照从本次保存开始建立，不能重建旧时刻缺失的全量快照。原子性限单进程存储访问；多进程并发、硬件断电/磁盘损坏、Agent 动作重放和共享规则整体回退仍未实现。
 
+## 2026-09-30：FIX-012 公开评测入口与结果口径
+
+- **现象与确认根因**：公开套件原先固定调用 Worker，未接入 Supervisor，却容易被理解为 Agentic 评测；EBT 静默确认模块，没有异常就标记 passed；同一报告的样本共用工作区和 Memory。Critic 的 live 路径仍传 `force_demo=True`；语义失败时结构检查结果可能被统计为成功。旧综合分混合异质代理指标，基线未人工标注却使用「误报数」名称。
+- **修改文件与行为**：新增 `app/benchmark_execution.py`；修改 `app/public_benchmarks.py`、`app/orchestrator.py`、`app/api.py` 及工作台 HTML/JS/CSS。EBT/StorySeek 可选 Workflow / Agentic，后者实际调用 Supervisor；每个样本独立存储和 Trace。默认在确认点暂停，显式模拟确认只记录 benchmark_simulator，不写真人确认事实、不回答业务澄清或追加预算。Critic live 调用模型，无密钥时拒绝静默离线。报告 v2 分离流程完成、质量门禁、技术失败、降级；保留运行、步骤、耗时和逻辑调用数，取消综合分并标识旧报告口径。
+- **评测边界**：StorySeek 止于模块规划；SRS/Critic 为组件评测，拒绝伪装成 Agentic。Critic 固定 4 个结构变异与 1 个基线，基线仅记录发现数。质量通过率按全部适用样本计算，未完成/技术失败/降级不计通过；没有已评定样本时显示未评定。真实模式模型调用异常即保守标记降级，即使后续重试成功仍保留需复核状态。
+- **验证**：`python tests/run_offline.py` 完整隔离回归 **171 项通过（30.944 秒）**，本次新增 15 项，覆盖真实 Supervisor 离线闭环、默认暂停、模拟确认标识、预算不自动扩展、高分阻塞发现、live Critic 模拟调用、语义技术失败、降级不算通过、样本异常隔离、无密钥拒绝、组件边界、StorySeek 终点、SRS 未评定、旧报告与 API 参数。Python 编译、JavaScript 语法与 Git 差异空白检查通过。[本地回归输出](../.local-private/benchmark-entry-tests-20260930.txt)。
+- **页面验证**：在临时数据目录、禁用模型凭证、合成 EBT 小样本下，通过页面运行 Agentic 并模拟确认，6 步完成；验证分项报告、运行 ID、模拟确认说明、历史报告重载，以及 Critic 不适用选项禁用。窄面板标题换行问题同步修正；浏览器 error/warn 为空。[本地页面截图](../.local-private/benchmark-entry-ui.png)。
+- **说明与剩余事项**：新增 [公开评测说明](benchmarks.md)，同步 README。代码与离线/模拟验证完成，没有真实模型调用、没有下载完整数据集，不宣称 GLM 或业务质量实测通过。词元代理指标、内部评审同源偏差、内置知识配置、多次重复对照、完整 token/成本统计与后台续跑仍需后续建设；本次只修正入口和报告可信度，不将其记录为模型能力提升。原业务项目与优惠券数据未修改。
+
 ## 后续记录模板
 
 ```text

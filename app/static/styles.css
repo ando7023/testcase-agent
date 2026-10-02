@@ -166,6 +166,7 @@ a.button { display: inline-flex; align-items: center; text-decoration: none; }
 .benchmark-result { margin-top: 20px; }
 .benchmark-score { display: grid; grid-template-columns: 84px 1fr; align-items: center; padding: 15px 0; border-top: 3px solid var(--green); border-bottom: 1px solid var(--ink); }
 .benchmark-score > strong { font: 600 46px/1 Georgia, serif; }
+.benchmark-score-v2 > strong { font-size: 28px; white-space: nowrap; }
 .benchmark-score > span { color: var(--muted); font-size: 11px; line-height: 1.7; }
 .benchmark-metrics { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); border-bottom: 1px solid var(--line); }
 .benchmark-metrics div { min-width: 0; padding: 12px 8px 12px 0; }
