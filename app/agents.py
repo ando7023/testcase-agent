@@ -82,11 +82,14 @@ class AgentHarness:
 
     def __init__(self, tracer: Any = None) -> None:
         self.tracer = tracer
+        self.on_event = None
 
     def execute(self, agent: Agent, payload: Any, context: Dict[str, Any]) -> Tuple[Any, AgentTrace]:
         started = time.time()
         started_at = utc_now_iso()
         mode = "llm" if agent.llm.enabled else "demo"
+        if self.on_event:
+            self.on_event({"event": "agent_start", "agent": agent.name, "mode": mode})
         error: Optional[str] = None
         span_context = (
             self.tracer.span(
@@ -104,6 +107,8 @@ class AgentHarness:
                 status = "success"
             except LLMError as exc:
                 if getattr(self, "allow_fallback", True) is False:
+                    if self.on_event:
+                        self.on_event({"event": "agent_end", "agent": agent.name, "status": "error"})
                     raise
                 error = str(exc)
                 mode = "fallback"
@@ -134,6 +139,8 @@ class AgentHarness:
             tool_calls=tool_calls,
             react_steps=react_steps,
         )
+        if self.on_event:
+            self.on_event({"event": "agent_end", "agent": agent.name, "status": status})
         return output, trace
 
 

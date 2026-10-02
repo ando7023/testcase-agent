@@ -85,7 +85,8 @@ def state_fingerprint(project):
 
 
 class AgenticSupervisor:
-    def __init__(self, orchestrator, planner=None):
+    def __init__(self, orchestrator, planner=None, on_event=None):
+        self.on_event = on_event
         self.worker = orchestrator
         self.store = orchestrator.store
         self.planner = planner if planner is not None else orchestrator.llm
@@ -283,6 +284,8 @@ class AgenticSupervisor:
             project = self._project(run.project_id)
             before = state_fingerprint(project)
             step = SupervisorStep(index=len(run.steps) + 1, before=before)
+            if self.on_event:
+                self.on_event({"event": "planning", "index": step.index, "max_steps": run.max_steps})
             try:
                 decision = self._choose(project, run)
                 step.decision = decision
@@ -290,6 +293,9 @@ class AgenticSupervisor:
                 if state_fingerprint(self._project(run.project_id)) != before:
                     raise ValueError("Project changed during planning; replan from fresh state")
                 self._validate(decision, project, run)
+                if self.on_event:
+                    self.on_event({"event": "decision", "index": step.index,
+                                   "capability": decision.capability or decision.action})
                 signature = decision.model_dump(exclude={"reason"})
                 needs_fresh_review = decision.capability == "quality_critic" and run.review_fingerprint != artifact_fingerprint(project)
                 if decision.action.startswith("invoke_") and not needs_fresh_review and any(

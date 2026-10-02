@@ -6,16 +6,22 @@ from .review_policy import is_blocking
 
 
 class BenchmarkExecution:
-    def __init__(self, workspace, factory, mode, execution, human_policy, max_steps, llm_options=None):
+    def __init__(self, workspace, factory, mode, execution, human_policy, max_steps, llm_options=None, on_event=None):
         self.workspace, self.factory = workspace, factory
         self.mode, self.execution = mode, execution
         self.human_policy, self.max_steps = human_policy, max_steps
         self.count = 0
         self.llm_options = {"stream": True, "reasoning_effort": "low", "timeout_seconds": 180}
         self.llm_options.update(llm_options or {})
+        self.on_event = on_event
+
+    def emit(self, event):
+        if self.on_event:
+            self.on_event(event)
 
     def sample(self, sample_id, operation, quality_applicable=True):
         self.count += 1
+        self.emit({"event": "sample_start", "sample_id": sample_id, "sample_index": self.count})
         # Index rather than external sample ID: neither traversal nor duplicate IDs
         # can cause different samples to share state.
         worker = self.factory(self.workspace / "sample-{:04d}".format(self.count))
@@ -32,16 +38,56 @@ class BenchmarkExecution:
         start = time.perf_counter()
         original = worker.llm.generate_json
         calls, failures, diagnostics = [], [], []
+        active_agent = ["supervisor" if self.execution == "agentic" else "worker"]
+        def agent_event(event):
+            if event["event"] == "agent_start":
+                active_agent[0] = event["agent"]
+            self.emit(dict(event, sample_id=sample_id))
+            if event["event"] == "agent_end":
+                active_agent[0] = "supervisor" if self.execution == "agentic" else "worker"
+        worker.harness.on_event = agent_event
 
         def observed(*args, **kwargs):
             calls.append(1)
             worker.llm.last_call_diagnostics = {}
+            call_id = "{}-{}".format(self.count, len(calls))
+            meta = {"sample_id": sample_id, "call_id": call_id, "call": len(calls), "agent": active_agent[0]}
+            self.emit(dict(meta, event="llm_start", stream=worker.llm.stream_json))
+            pending, last_flush, last_progress = [], [time.perf_counter()], [0.0]
+            def flush():
+                if pending:
+                    self.emit(dict(meta, event="delta", text="".join(pending)))
+                    pending.clear()
+                    last_flush[0] = time.perf_counter()
+            def delta(text):
+                if not self.on_event:
+                    return
+                pending.append(text)
+                if time.perf_counter() - last_flush[0] >= 0.06 or len(pending) >= 32:
+                    flush()
+            def progress(data):
+                now = time.perf_counter()
+                if now - last_progress[0] >= 1 or data.get("phase") in {"connected", "complete", "timeout"}:
+                    # Forward counters only, never reasoning_content or raw errors.
+                    safe = {k: data[k] for k in ("phase", "seconds", "event_count", "content_chars") if k in data}
+                    self.emit(dict(meta, event="llm_progress", **safe))
+                    last_progress[0] = now
+            previous_delta = worker.llm.on_content_delta
+            previous_progress = worker.llm.on_stream_progress
+            worker.llm.on_content_delta = delta
+            worker.llm.on_stream_progress = progress
+            status = "success"
             try:
                 return original(*args, **kwargs)
             except Exception as exc:
+                status = "error"
                 failures.append(getattr(exc, "code", type(exc).__name__))
                 raise
             finally:
+                flush()
+                self.emit(dict(meta, event="llm_end", status=status))
+                worker.llm.on_content_delta = previous_delta
+                worker.llm.on_stream_progress = previous_progress
                 detail = {"call": len(calls), **worker.llm.last_call_diagnostics}
                 try:
                     prompt = json.loads(args[1] if len(args) > 1 else kwargs.get("user_prompt", ""))
@@ -89,6 +135,8 @@ class BenchmarkExecution:
                       model=worker.llm.model if self.mode == "live" else None)
         if project:
             result["project_id"] = project.id
+        self.emit({"event": "sample_end", "sample_id": sample_id, "status": result["status"],
+                   "question": result.get("question", ""), "technical_failure": result["technical_failure"]})
         return result
 
     def pipeline(self, worker, title, requirement, target="cases"):
@@ -105,7 +153,7 @@ class BenchmarkExecution:
 
         if self.execution == "agentic":
             from .supervisor import AgenticSupervisor
-            controller = AgenticSupervisor(worker)
+            controller = AgenticSupervisor(worker, on_event=self.emit)
             goal = ("仅完成需求理解与模块规划，随后请求人工确认模块，不生成用例。" if target == "modules" else
                     "生成满足需求的测试用例，根据评审反馈修复并完成收尾；缺少业务依据时请求澄清。")
             run = controller.start(project.id, goal, self.max_steps)

@@ -60,6 +60,7 @@ class OpenAICompatibleClient:
         self.stream_json = os.getenv("LLM_STREAM_JSON", "").lower() in {"1", "true", "yes"}
         self.on_stream_progress = None
         self.on_json_response = None
+        self.on_content_delta = None
         self._diagnostic_context = ContextVar("llm_diagnostics", default=None)
         self._started_context = ContextVar("llm_request_started", default=0.0)
         self.reasoning_effort = os.getenv("LLM_REASONING_EFFORT", "")
@@ -196,6 +197,8 @@ class OpenAICompatibleClient:
                 raise LLMError("LLM ended without a complete answer: finish_reason={}".format(finish_reason),
                                code="output_limit" if finish_reason == "length" else "incomplete_response")
             content = payload["choices"][0]["message"]["content"]
+            if self.on_content_delta and isinstance(content, str):
+                self.on_content_delta(content)
             if self.on_json_response and isinstance(content, str):
                 self.on_json_response(content)
             return self._parse_json_content(content), self._usage(
@@ -226,7 +229,7 @@ class OpenAICompatibleClient:
             metadata = {}
             with self._diagnostics(span, True):
                 result, content, first_token_ms = self._generate_json_stream_impl(
-                    system_prompt, user_prompt, schema, on_delta, metadata)
+                    system_prompt, user_prompt, schema, on_delta or self.on_content_delta, metadata)
             if span:
                 span.output_summary = content[:2000]
                 span.usage = self._usage(

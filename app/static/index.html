@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>CaseForge · 智能用例工坊</title>
-  <link rel="stylesheet" href="/static/styles.css?v=benchmark-v2">
+  <link rel="stylesheet" href="/static/styles.css?v=benchmark-chat1">
 </head>
 <body>
   <header class="topbar">
@@ -175,6 +175,7 @@ CheckEquipmentAvailability 只查询库存，不改变申请状态；UpdateBorro
       </div>
       <div class="panel-section">
         <h3>运行评测</h3>
+        <details id="benchmark-settings" open><summary>评测设置</summary>
         <form id="benchmark-form">
           <label>评测任务<select id="benchmark-suite"></select></label>
           <div class="benchmark-form-row">
@@ -192,6 +193,15 @@ CheckEquipmentAvailability 只查询库存，不改变申请状态；UpdateBorro
           <p id="benchmark-execution-note" class="benchmark-lead"></p>
           <button class="button primary" id="benchmark-run" type="submit">运行 Benchmark</button>
         </form>
+        </details>
+        <section id="benchmark-chat" class="benchmark-chat" aria-label="评测对话" hidden>
+          <div class="benchmark-chat-heading"><h3>评测对话</h3><span data-chat-clock>0:00</span></div>
+          <p class="benchmark-chat-status" data-chat-status role="status" aria-live="polite"></p>
+          <p class="benchmark-chat-note">实时展示执行进度与模型正文。预览未经最终验收，不展示内部思考内容。</p>
+          <p class="benchmark-chat-note" data-chat-retention hidden>仅保留最近 100 条消息，完整结果请查看报告与本地 Trace。</p>
+          <div class="benchmark-chat-log" role="log" aria-label="评测消息" aria-live="off" tabindex="0"></div>
+          <button class="button ghost" type="button" data-chat-follow hidden>↓ 查看最新消息</button>
+        </section>
         <div id="benchmark-result" class="benchmark-result"></div>
       </div>
       <div class="panel-section">
@@ -220,7 +230,8 @@ CheckEquipmentAvailability 只查询库存，不改变申请状态；UpdateBorro
     <p id="memory-version-restore-note">整体恢复包含项目产物、会话与决策记忆、项目长期事实、示例和 badcase；共享团队规则与运行历史保留。恢复前自动备份，恢复后重新确认模块和评审；后续人工拒绝不会被旧快照覆盖。</p>
     <button class="button primary" id="memory-version-restore" type="button" disabled>恢复到所选旧版本</button>
   </dialog>
-  <script src="/static/app.js?v=benchmark-diagnostics"></script>
+  <script src="/static/benchmark-chat.js?v=1"></script>
+  <script src="/static/app.js?v=benchmark-chat1"></script>
   <script src="/static/module-workspace.js?v=module4"></script>
   <script src="/static/case-workspace.js?v=feedback2"></script>
   <script src="/static/chunk-manager.js?v=chunk5"></script>

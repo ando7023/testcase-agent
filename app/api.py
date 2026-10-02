@@ -853,6 +853,16 @@ def benchmark_report(report_id: str):
         raise HTTPException(status_code=404, detail=str(exc))
 
 
+@app.post("/api/benchmarks/stream")
+def stream_public_benchmark(payload: BenchmarkRunCreate):
+    from .benchmark_stream import benchmark_stream
+    return benchmark_stream(lambda emit: orchestrator.run_public_benchmark(
+        payload.suite, payload.limit, payload.split, payload.mode,
+        execution=payload.execution, human_policy=payload.human_policy, max_steps=payload.max_steps,
+        llm_options={"stream": payload.stream, "reasoning_effort": payload.reasoning_effort,
+                     "timeout_seconds": payload.timeout_seconds}, on_event=emit))
+
+
 @app.get("/api/tools")
 def tool_catalog():
     return orchestrator.tool_catalog()

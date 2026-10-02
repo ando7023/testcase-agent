@@ -417,6 +417,7 @@ class PublicBenchmarkService:
         human_policy: str = "pause",
         max_steps: int = 12,
         llm_options: Optional[Dict[str, Any]] = None,
+        on_event=None,
     ) -> Dict[str, Any]:
         limit = max(1, min(20, int(limit)))
         if mode not in {"offline", "live"}:
@@ -436,7 +437,10 @@ class PublicBenchmarkService:
             raise ValueError("Invalid benchmark model options")
         report_id = "BR-" + uuid.uuid4().hex[:12]
         workspace = self.data_root / "benchmark_runs" / report_id
-        runner = BenchmarkExecution(workspace, pipeline_factory, mode, execution, human_policy, max_steps, options)
+        runner = BenchmarkExecution(workspace, pipeline_factory, mode, execution, human_policy, max_steps, options, on_event)
+        if on_event:
+            on_event({"event": "report_start", "report_id": report_id, "suite": suite, "mode": mode,
+                      "execution": execution})
         runners = {
             "ebt_generation": lambda: self._run_ebt(runner, limit),
             "storyseek_pipeline": lambda: self._run_storyseek(

@@ -375,7 +375,8 @@ $('#benchmark-toggle').addEventListener('click', () => {
   $('#context-panel').classList.remove('open');
   $('#trace-panel').classList.remove('open');
   $('#benchmark-panel').classList.add('open');
-  loadBenchmarks();
+  if (benchmarkRunning) $('#benchmark-chat').scrollIntoView({block: 'nearest'});
+  else loadBenchmarks();
 });
 $('#benchmark-close').addEventListener('click', () => $('#benchmark-panel').classList.remove('open'));
 
@@ -520,12 +521,13 @@ function updateBenchmarkOptions() {
 $('#benchmark-suite').addEventListener('change', updateBenchmarkOptions);
 $('#benchmark-execution').addEventListener('change', updateBenchmarkOptions);
 
+const benchmarkChat = new BenchmarkChat($('#benchmark-chat'));
+let benchmarkRunning = false;
 $('#benchmark-form').addEventListener('submit', async event => {
   event.preventDefault();
+  if (benchmarkRunning) return;
   const mode = $('#benchmark-mode').value;
-  setBusy(true, mode === 'live' ? '正在使用真实模型运行公开评测…' : '正在隔离工作区运行离线评测…');
-  try {
-    const report = await api('/api/benchmarks/run', {method: 'POST', body: JSON.stringify({
+  const payload = {
       suite: $('#benchmark-suite').value,
       split: $('#benchmark-split').value,
       limit: Number($('#benchmark-limit').value),
@@ -536,11 +538,27 @@ $('#benchmark-form').addEventListener('submit', async event => {
       stream: $('#benchmark-stream').value === 'true',
       reasoning_effort: $('#benchmark-reasoning').value,
       timeout_seconds: Number($('#benchmark-timeout').value),
-    })});
+  };
+  const label = $('#benchmark-suite').selectedOptions[0]?.textContent || payload.suite;
+  const controls = [...$('#benchmark-form').querySelectorAll('input, select, button')];
+  const disabled = controls.map(control => control.disabled);
+  benchmarkRunning = true;
+  controls.forEach(control => { control.disabled = true; });
+  $('#benchmark-run').textContent = '评测进行中…';
+  $('#benchmark-settings').open = false;
+  $('#benchmark-panel').classList.add('chat-active');
+  $('#benchmark-result').replaceChildren();
+  try {
+    const report = await benchmarkChat.run(payload, label);
     renderBenchmarkReport(report);
     await loadBenchmarks();
   } catch (error) { notify(error.message); }
-  finally { setBusy(false); }
+  finally {
+    benchmarkRunning = false;
+    controls.forEach((control, index) => { control.disabled = disabled[index]; });
+    $('#benchmark-run').textContent = '运行 Benchmark';
+    updateBenchmarkOptions();
+  }
 });
 
 async function loadTraces() {
