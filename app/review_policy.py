@@ -18,10 +18,14 @@ def contains_evidence(value, quote):
     return False
 
 
-def is_blocking(finding):
+def is_blocking(finding, policy="strict"):
     if finding.severity in {"high", "critical", "error"} or finding.category == "review_incomplete":
         return True
     if finding.disposition == "clarification":
+        if (policy == "evidence_only" and finding.clarification_basis_verified
+                and finding.clarification_kind in {"execution_detail", "out_of_scope"}
+                and finding.clarification_reason.strip()):
+            return False
         return True
     if finding.category == "semantic" and finding.disposition == "suggestion":
         return False
@@ -46,17 +50,18 @@ def record_review(run, report, fingerprint):
     if any(f.category == "review_incomplete" for f in report.findings):
         return
     current = {}
+    blocking = lambda f: is_blocking(f, getattr(run, "clarification_policy", "strict"))
     for finding in report.findings:
         finding.issue_id = finding.issue_id or issue_key(finding)
         key = finding.issue_id
         prior = run.issue_ledger.get(key, {})
         entry = current.get(key)
-        if entry is None or (is_blocking(finding) and not entry["blocking"]):
+        if entry is None or (blocking(finding) and not entry["blocking"]):
             current[key] = {
-                "finding": finding.model_dump(), "blocking": is_blocking(finding),
+                "finding": finding.model_dump(), "blocking": blocking(finding),
                 "status": "open", "seen_reviews": prior.get("seen_reviews", 0) + 1,
                 "reopened": prior.get("reopened", 0) + int(prior.get("status") == "not_observed"),
-                "classification_changed": bool(prior and prior.get("blocking") != is_blocking(finding)),
+                "classification_changed": bool(prior and prior.get("blocking") != blocking(finding)),
                 "last_fingerprint": fingerprint,
             }
     for key, entry in run.issue_ledger.items():

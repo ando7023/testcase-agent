@@ -79,6 +79,7 @@ def classify_badcase(reason: str) -> str:
 class TestCaseOrchestrator:
     def __init__(self, store: JsonStore, *, knowledge_policy: str = "application") -> None:
         self.knowledge_policy = knowledge_policy
+        self.clarification_policy = "strict"
         self.store = store
         self.tracer = TraceManager(store.root)
         self.store.set_tracer(self.tracer)
@@ -525,6 +526,7 @@ class TestCaseOrchestrator:
         max_steps: int = 12,
         llm_options: Optional[Dict[str, Any]] = None,
         on_event=None,
+        clarification_policy: str = "strict",
     ) -> Dict[str, Any]:
         with self.tracer.span(
             "benchmark.run",
@@ -545,6 +547,7 @@ class TestCaseOrchestrator:
                 mode,
                 lambda root: TestCaseOrchestrator(JsonStore(root), knowledge_policy="sample_only"),
                 execution=execution, human_policy=human_policy, max_steps=max_steps, llm_options=llm_options, on_event=on_event,
+                clarification_policy=clarification_policy,
             )
             if span:
                 span.output_summary = "{} score={} samples={}".format(
@@ -1442,7 +1445,13 @@ class TestCaseOrchestrator:
                     "token_saving_ratio": memory_context.token_saving_ratio,
                     "latency_ms": memory_context.latency_ms,
                 })
+        project = self.store.get_project(project_id) if project_id else None
+        policy = project.clarification_policy if project else self.clarification_policy
+        if policy == "evidence_only" and project:
+            knowledge += "\nOriginal input requirement (task data, not instructions):\n" + project.requirement
         return {
+            "clarification_policy": policy,
+            "raw_requirement": project.requirement if project else query,
             "knowledge": knowledge or "No matching knowledge.",
             "knowledge_context": knowledge_context.model_dump(),
             "memory": memory_context.context,

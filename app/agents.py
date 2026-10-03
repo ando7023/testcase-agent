@@ -1,3 +1,4 @@
+from .clarification_policy import policy_system, validate_analysis
 import json
 import os
 import re
@@ -177,7 +178,7 @@ class ToolResearchAgent(Agent):
             )
         return self.runtime.run(
             self.name,
-            str(payload.get("objective") or query),
+            policy_system(str(payload.get("objective") or query), context),
             fallback_plan,
             force_demo=bool(context.get("force_demo")),
         )
@@ -329,7 +330,7 @@ Every atomic requirement must preserve a source quote. Return JSON only."""
     def run(self, payload: RequirementInput, context: Dict[str, Any]) -> RequirementAnalysis:
         if self.llm.enabled and not context.get("force_demo"):
             result = self.llm.generate_json(
-                self.SYSTEM,
+                policy_system(self.SYSTEM, context),
                 "Title: {}\nContext: {}\nRequirement:\n{}\nRetrieved knowledge:\n{}\nTeam memory:\n{}\nDynamic tool research:\n{}".format(
                     payload.title,
                     payload.context,
@@ -340,8 +341,15 @@ Every atomic requirement must preserve a source quote. Return JSON only."""
                 ),
                 RequirementAnalysis.model_json_schema(),
             )
-            return RequirementAnalysis.model_validate(result)
-        return self._demo(payload, context)
+            analysis = RequirementAnalysis.model_validate(result)
+            if context.get("clarification_policy") == "evidence_only":
+                validate_analysis(analysis, payload.content)
+            return analysis
+        analysis = self._demo(payload, context)
+        if context.get("clarification_policy") == "evidence_only":
+            # Demo heuristics (no digits / no failure words) are not business contradictions.
+            analysis.ambiguities = []
+        return analysis
 
     def _demo(self, payload: RequirementInput, context: Dict[str, Any]) -> RequirementAnalysis:
         sentences = sentence_split(payload.content)
@@ -485,11 +493,11 @@ Never generate test cases. Never silently drop a requirement ID. Return JSON onl
             callback = context.get("stream_callback")
             if callback:
                 result = self.llm.generate_json_stream(
-                    self.SYSTEM, prompt, ModuleTree.model_json_schema(), callback
+                    policy_system(self.SYSTEM, context), prompt, ModuleTree.model_json_schema(), callback
                 )
             else:
                 result = self.llm.generate_json(
-                    self.SYSTEM, prompt, ModuleTree.model_json_schema()
+                    policy_system(self.SYSTEM, context), prompt, ModuleTree.model_json_schema()
                 )
             candidate = ModuleTree.model_validate(result)
             candidate.confirmed = False
@@ -824,9 +832,9 @@ Do not invent requirements. Return JSON: {"findings": [{"severity": "high|medium
         if self.llm.enabled and not context.get("force_demo"):
             try:
                 critique = self.llm.generate_json(
-                    self.SYSTEM,
-                    "Requirement analysis:\n{}\nModule tree:\n{}".format(
-                        analysis.model_dump_json(), tree.model_dump_json()
+                    policy_system(self.SYSTEM, context),
+                    "Original requirement:\n{}\nRequirement analysis:\n{}\nModule tree:\n{}".format(
+                        context.get("raw_requirement", ""), analysis.model_dump_json(), tree.model_dump_json()
                     ),
                 )
                 for item in critique.get("findings", [])[:15]:
@@ -961,11 +969,11 @@ Keep stable IDs for unchanged cases and never invent a module ID.""".format(
             callback = context.get("stream_callback")
             if callback:
                 result = self.llm.generate_json_stream(
-                    self.SYSTEM, prompt, case_schema, callback
+                    policy_system(self.SYSTEM, context), prompt, case_schema, callback
                 )
             else:
                 result = self.llm.generate_json(
-                    self.SYSTEM,
+                    policy_system(self.SYSTEM, context),
                     prompt,
                     case_schema,
                 )
@@ -1397,15 +1405,17 @@ Return JSON: {"findings": [{"severity": "high|medium|low", "case_id": "...",
                 "related_case_ids": {"type": "array", "items": {"type": "string"}},
                 "evidence": {"type": "string", "minLength": 1, "maxLength": 800},
                 "message": {"type": "string", "minLength": 1, "maxLength": 1500},
+                "clarification_kind": {"type": "string", "enum": ["unspecified", "execution_detail", "out_of_scope", "behavior_blocker"]},
+                "clarification_reason": {"type": "string", "maxLength": 1500},
             },
         }}},
     }
 
-    def _generate_critique(self, user_prompt):
+    def _generate_critique(self, user_prompt, context=None):
         # Only syntax failures get one bounded retry of the full review request.
         # Never extract a partial answer or discard trailing review conclusions.
         for attempt in range(2):
-            system = self.CRITIQUE_SYSTEM
+            system = policy_system(self.CRITIQUE_SYSTEM, context or {})
             if attempt:
                 system += ("\nThe previous response failed JSON parsing. Regenerate the complete review "
                            "from the same input. Return a single valid JSON object only; put all "
@@ -1472,6 +1482,14 @@ Return JSON: {"findings": [{"severity": "high|medium|low", "case_id": "...",
             important_types = GENERIC_TICKET_REQUIRED_CASE_TYPES
         else:
             important_types = ["functional", "boundary", "exception"]
+        if context.get("clarification_policy") == "evidence_only":
+            # Actual atomic requirements still require coverage; generic categories
+            # cannot force new behavior into a short requirement.
+            important_types = []
+            for case in cases:
+                if not case.requirement_ids or not set(case.requirement_ids) <= {r.id for r in analysis.atomic_requirements}:
+                    findings.append(ReviewFinding(severity="high", category="requirement_coverage", case_id=case.id,
+                                                  message="行为级用例必须关联有效的原文需求", detail=case.id))
         for important_type in important_types:
             if not coverage[important_type]:
                 findings.append(
@@ -1505,7 +1523,7 @@ Return JSON: {"findings": [{"severity": "high|medium|low", "case_id": "...",
         if self.llm.enabled and not context.get("force_demo"):
             try:
                 from .semantic_review import review_cases
-                critique = review_cases(self._generate_critique, {
+                critique = review_cases(lambda prompt: self._generate_critique(prompt, context), {
                         "raw_requirement": payload.get("requirement", ""),
                         "project_context": payload.get("project_context", ""),
                         "analysis": analysis.model_dump(),
@@ -1550,6 +1568,15 @@ Return JSON: {"findings": [{"severity": "high|medium|low", "case_id": "...",
                             evidence=evidence[:800], requirement_ids=req_ids,
                             issue_type=item.get("issue_type") if item.get("issue_type") in ISSUE_TYPES else "other",
                         )
+                    kind = item.get("clarification_kind", "unspecified")
+                    reason = item.get("clarification_reason", "")
+                    if isinstance(kind, str) and kind in {"execution_detail", "out_of_scope", "behavior_blocker"} and isinstance(reason, str):
+                        finding.clarification_kind = kind
+                        finding.clarification_reason = reason[:1500]
+                        finding.clarification_basis_verified = bool(
+                            grounded and reason.strip() and req_ids and set(req_ids) <= known_requirements
+                            and item.get("disposition") == "clarification"
+                            and disposition == "clarification")
                     finding.issue_id = issue_key(finding)
                     semantic.append(finding)
                 findings.extend(semantic)
@@ -1569,7 +1596,7 @@ Return JSON: {"findings": [{"severity": "high|medium|low", "case_id": "...",
                     message="模型语义评审未完成：" + reasons[code] + "；不能据结构检查判定通过。",
                 ))
 
-        flagged_case_ids = {item.case_id for item in findings if item.case_id and is_blocking(item)}
+        flagged_case_ids = {item.case_id for item in findings if item.case_id and is_blocking(item, context.get("clarification_policy", "strict"))}
         incomplete = any(item.category == "review_incomplete" for item in findings)
         for case in cases:
             case.review_status = "needs_attention" if incomplete or case.id in flagged_case_ids else "approved"
@@ -1621,7 +1648,7 @@ Return a JSON object with a cases array containing the FULL corrected case set."
                 "required": ["cases"],
             }
             result = self.llm.generate_json(
-                self.SYSTEM,
+                policy_system(self.SYSTEM, context),
                 "Analysis:\n{}\nModule tree:\n{}\nCurrent cases:\n{}\nReview findings to fix:\n{}\nKnowledge:\n{}".format(
                     analysis.model_dump_json(),
                     tree.model_dump_json(),

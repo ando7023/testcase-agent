@@ -15,6 +15,8 @@ from .llm import LLMError
 from .orchestrator import PipelineError
 from .skills import SKILLS, resolve_skills, select_skills
 from .supervisor_models import SupervisorDecision, SupervisorRun, SupervisorStep
+from .clarification_policy import policy_system, behavior_blockers
+from .models import ReviewFinding
 
 
 @dataclass(frozen=True)
@@ -76,6 +78,8 @@ def artifact_fingerprint(project):
     }
     if project.memory_epoch:
         data["memory_epoch"] = project.memory_epoch
+    if project.clarification_policy != "strict":
+        data["clarification_policy"] = project.clarification_policy
     return hashlib.sha256(json.dumps(data, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
 
 
@@ -95,8 +99,9 @@ class AgenticSupervisor:
         if type(max_steps) is not int or not 1 <= max_steps <= 20:
             raise ValueError("Initial budget must be 1–20 steps")
         with self.store.project_lease(project_id):
-            self._project(project_id)
+            project = self._project(project_id)
             run = SupervisorRun(id="AR-" + uuid.uuid4().hex, project_id=project_id,
+                                clarification_policy=project.clarification_policy,
                                 goal=goal, max_steps=max_steps,
                                 mode="model" if self.planner.enabled else "deterministic")
             self.store.save_agent_run(run)
@@ -114,6 +119,8 @@ class AgenticSupervisor:
             if run.status not in {"waiting_input", "waiting_confirmation", "budget_exhausted"}:
                 raise ValueError("Only paused runs can continue; start a new run for terminal/interrupted runs")
             project = self._project(project_id)
+            if project.clarification_policy != run.clarification_policy:
+                raise ValueError("Clarification policy changed; start a new evaluation run")
             if run.status == "waiting_confirmation" and not self._confirmed(project):
                 raise ValueError("Confirm the module tree in the module workspace before continuing")
             if run.status == "waiting_input" and not answer.strip():
@@ -148,13 +155,22 @@ class AgenticSupervisor:
 
     @staticmethod
     def _blocking(project):
-        return [item for item in project.review.findings
-                if is_blocking(item)] if project.review else []
+        findings = [item for item in project.review.findings
+                    if is_blocking(item, project.clarification_policy)] if project.review else []
+        findings += [ReviewFinding(severity="medium", category="clarification", disposition="clarification",
+                                  message=g.question, requirement_ids=g.requirement_ids,
+                                  clarification_kind="behavior_blocker") for g in behavior_blockers(project)]
+        if project.clarification_policy == "evidence_only" and project.module_review:
+            findings += [ReviewFinding(severity=f.severity, category="module_scope", message=f.message)
+                         for f in project.module_review.findings if f.severity in {"high", "critical", "error"}]
+        return findings
 
     def _snapshot(self, project):
         analysis = project.analysis
         return {
             "phase": project.phase, "requirement": project.requirement[:12000], "context": project.context[:3000],
+            "clarification_policy": project.clarification_policy,
+            "blocking_clarifications": [g.model_dump() for g in behavior_blockers(project)],
             "materials": [{"filename": d.filename, "type": d.document_type, "chars": len(d.normalized_text),
                            "chunks": len(d.chunks), "warnings": d.warnings[:10]} for d in project.source_documents],
             "analysis": analysis.model_dump_json()[:18000] if analysis else None,
@@ -178,13 +194,17 @@ class AgenticSupervisor:
             "observations": [step.model_dump() for step in run.steps[-8:]],
         }
         with self.worker.tracer.span("supervisor.decide", kind="agent", attributes={"agent_run_id": run.id}):
-            raw = self.planner.generate_json(SYSTEM, json.dumps(context, ensure_ascii=False), SupervisorDecision.model_json_schema())
+            raw = self.planner.generate_json(policy_system(SYSTEM, {"clarification_policy": project.clarification_policy}),
+                                             json.dumps(context, ensure_ascii=False), SupervisorDecision.model_json_schema())
         return SupervisorDecision.model_validate(raw)
 
     def _offline(self, project, run):
         """Transparent deterministic demo policy. Never presented as model autonomy."""
         if not project.analysis:
             name = "requirement_understanding"
+        elif behavior_blockers(project):
+            return SupervisorDecision(action="request_input", reason="存在影响预期行为的关键歧义",
+                                      question="\n".join(g.question for g in behavior_blockers(project))[:2000])
         elif not project.module_tree:
             name = "module_planning"
         elif not self._confirmed(project):
@@ -209,6 +229,25 @@ class AgenticSupervisor:
                 raise ValueError("Control actions cannot invoke capabilities or skills")
             if decision.action == "request_input" and not decision.question.strip():
                 raise ValueError("request_input requires a concrete question")
+            if decision.action == "request_input" and project.clarification_policy == "evidence_only":
+                gaps = behavior_blockers(project)
+                if gaps:
+                    decision.question = "请澄清影响预期行为的问题：\n" + "\n".join(g.question for g in gaps)
+                    decision.question = decision.question[:2000]
+                elif self._blocking(project):
+                    pass  # Real review blockers and technical failures retain their existing gates.
+                elif project.module_tree and not self._confirmed(project):
+                    decision.question = "请确认模块树。执行细节缺口另列于报告，本次确认不代表回答业务问题或人工验收用例。"
+                elif project.analysis and not project.analysis.atomic_requirements:
+                    decision.question = "当前材料尚未提取出可测试的明确行为，请补充核心需求。"
+                else:
+                    required = (6 if not project.analysis else 5 if not project.module_tree else
+                                3 if not project.cases else 2 if not project.review or run.review_fingerprint != artifact_fingerprint(project) else 1)
+                    remaining = run.max_steps - len(run.steps)
+                    if remaining < required:
+                        decision.question = "剩余 {} 步，按当前产物至少需要 {} 步完成后续生成、评审或收尾；是否追加步骤预算？".format(remaining, required)
+                    else:
+                        raise ValueError("Behavior-level policy: missing implementation details or out-of-scope ideas do not justify pausing; continue supported work")
             if decision.action == "finish":
                 if not self._confirmed(project) or not project.cases or not project.review:
                     raise ValueError("Completion requires confirmed modules, cases and a review")
@@ -307,6 +346,8 @@ class AgenticSupervisor:
                 self.store.save_agent_run(run)
                 if decision.action == "request_input":
                     run.status = "waiting_confirmation" if project.module_tree and not self._confirmed(project) else "waiting_input"
+                    if project.clarification_policy == "evidence_only" and self._blocking(project):
+                        run.status = "waiting_input"
                     run.question = decision.question
                     step.observation = {"question": run.question}
                 elif decision.action == "finish":

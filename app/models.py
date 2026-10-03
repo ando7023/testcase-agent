@@ -81,6 +81,16 @@ class EventContract(BaseModel):
     evidence_ids: List[str] = Field(default_factory=list)
 
 
+class ClarificationItem(BaseModel):
+    id: str = Field(min_length=1, max_length=80)
+    kind: Literal["execution_detail", "out_of_scope", "behavior_blocker"]
+    question: str = Field(min_length=1, max_length=1500)
+    requirement_ids: List[str] = Field(default_factory=list)
+    affected_scenarios: List[str] = Field(min_length=1, max_length=20)
+    source_quote: str = Field(min_length=1, max_length=2000)
+    reason: str = Field(min_length=1, max_length=1500)
+
+
 class RequirementAnalysis(BaseModel):
     summary: str
     actors: List[str] = Field(default_factory=list)
@@ -88,6 +98,7 @@ class RequirementAnalysis(BaseModel):
     business_rules: List[str] = Field(default_factory=list)
     constraints: List[str] = Field(default_factory=list)
     ambiguities: List[str] = Field(default_factory=list)
+    clarification_items: List[ClarificationItem] = Field(default_factory=list)
     atomic_requirements: List[AtomicRequirement] = Field(default_factory=list)
     risk_hints: List[str] = Field(default_factory=list)
     ticket_types: List[str] = Field(default_factory=list)
@@ -279,6 +290,9 @@ class ReviewFinding(BaseModel):
     issue_id: str = ""
     evidence: str = ""
     requirement_ids: List[str] = Field(default_factory=list)
+    clarification_kind: Literal["unspecified", "execution_detail", "out_of_scope", "behavior_blocker"] = "unspecified"
+    clarification_reason: str = ""
+    clarification_basis_verified: bool = False  # Set by runtime, never trusted from model JSON.
 
 
 class ReviewReport(BaseModel):
@@ -463,6 +477,7 @@ class ProjectState(BaseModel):
     title: str
     requirement: str
     context: str = ""
+    clarification_policy: Literal["strict", "evidence_only"] = "strict"
     phase: str = "draft"
     memory_epoch: str = ""
     source_documents: List[ParsedDocument] = Field(default_factory=list)

@@ -3,10 +3,11 @@ import time
 import json
 
 from .review_policy import is_blocking
+from .clarification_policy import behavior_blockers, scope_summary
 
 
 class BenchmarkExecution:
-    def __init__(self, workspace, factory, mode, execution, human_policy, max_steps, llm_options=None, on_event=None):
+    def __init__(self, workspace, factory, mode, execution, human_policy, max_steps, llm_options=None, on_event=None, clarification_policy="strict"):
         self.workspace, self.factory = workspace, factory
         self.mode, self.execution = mode, execution
         self.human_policy, self.max_steps = human_policy, max_steps
@@ -14,6 +15,9 @@ class BenchmarkExecution:
         self.llm_options = {"stream": True, "reasoning_effort": "low", "timeout_seconds": 180}
         self.llm_options.update(llm_options or {})
         self.on_event = on_event
+        if clarification_policy not in {"strict", "evidence_only"}:
+            raise ValueError("Invalid clarification policy")
+        self.clarification_policy = clarification_policy
 
     def emit(self, event):
         if self.on_event:
@@ -26,6 +30,7 @@ class BenchmarkExecution:
         # can cause different samples to share state.
         worker = self.factory(self.workspace / "sample-{:04d}".format(self.count))
         worker.knowledge_policy = "sample_only"
+        worker.clarification_policy = self.clarification_policy
         worker.harness.allow_fallback = self.mode != "live"
         worker.llm.strict_review_failures = self.mode == "live"
         worker.llm.stream_json = self.llm_options["stream"]
@@ -135,12 +140,27 @@ class BenchmarkExecution:
                       model=worker.llm.model if self.mode == "live" else None)
         if project:
             result["project_id"] = project.id
+            result.update(scope_summary(project))
+            if project.review:
+                details = [f.model_dump() for f in project.review.findings if f.disposition == "clarification"]
+                result["review_clarifications"] = details
+                blocking_findings = [f for f in project.review.findings if is_blocking(f, project.clarification_policy)]
+                result["blocked_requirement_ids"] = sorted(set(result["blocked_requirement_ids"]) | {
+                    rid for f in blocking_findings for rid in f.requirement_ids})
+                if blocking_findings:
+                    result["execution_readiness"] = "blocked"
+                elif any(f.clarification_kind == "execution_detail" for f in project.review.findings):
+                    result["execution_readiness"] = "needs_preparation"
+            if self._module_blocked(project):
+                result["execution_readiness"] = "blocked"
         self.emit({"event": "sample_end", "sample_id": sample_id, "status": result["status"],
                    "question": result.get("question", ""), "technical_failure": result["technical_failure"]})
         return result
 
     def pipeline(self, worker, title, requirement, target="cases"):
         project = worker.store.create_project(title, requirement)
+        project.clarification_policy = self.clarification_policy
+        worker.store.save_project(project)
         run = None
         confirmations = []
 
@@ -155,11 +175,12 @@ class BenchmarkExecution:
             from .supervisor import AgenticSupervisor
             controller = AgenticSupervisor(worker, on_event=self.emit)
             goal = ("仅完成需求理解与模块规划，随后请求人工确认模块，不生成用例。" if target == "modules" else
-                    "生成满足需求的测试用例，根据评审反馈修复并完成收尾；缺少业务依据时请求澄清。")
+                    "生成满足需求的测试用例，根据评审反馈修复并完成收尾；按配置的澄清策略判断缺失信息，不能补造契约。")
             run = controller.start(project.id, goal, self.max_steps)
             project = worker.store.get_project(project.id)
             if (target == "cases" and run.status == "waiting_confirmation" and
                     self.human_policy == "simulate_confirm" and len(run.steps) < run.max_steps and
+                    not behavior_blockers(project) and not self._module_blocked(project) and
                     project.module_tree and project.module_tree.modules):
                 confirm()
                 run = controller.resume(project.id, run.id)
@@ -174,18 +195,23 @@ class BenchmarkExecution:
             status = "completed" if target == "modules" else "waiting_confirmation"
             if target == "cases":
                 complete = False
-                if self.human_policy == "simulate_confirm" and project.module_tree and project.module_tree.modules:
+                if (self.human_policy == "simulate_confirm" and project.module_tree and project.module_tree.modules
+                        and not behavior_blockers(project) and not self._module_blocked(project)):
                     confirm()
                     project = worker.generate_cases(project)
                     project = worker.review(project)
                     complete, status = True, "completed"
+            if behavior_blockers(project) or self._module_blocked(project):
+                complete, status = False, "waiting_input"
 
         review = project.review if target == "cases" else project.module_review
         incomplete = bool(review and any(f.category == "review_incomplete" for f in review.findings))
         gate = None
         if review and not incomplete:
-            gate = (bool(project.cases) and not any(is_blocking(f) for f in review.findings) if target == "cases" else
+            gate = (bool(project.cases) and not any(is_blocking(f, project.clarification_policy) for f in review.findings) if target == "cases" else
                     not any(f.severity in {"high", "critical", "error"} for f in review.findings))
+            if behavior_blockers(project):
+                gate = False
         if run and target == "cases" and gate:
             from .supervisor import artifact_fingerprint
             gate = run.review_fingerprint == artifact_fingerprint(project)
@@ -204,4 +230,13 @@ class BenchmarkExecution:
             result["actions"] = [{"index": s.index, "status": s.status,
                                   "capability": s.decision.capability or s.decision.action if s.decision else "planner_error"}
                                  for s in run.steps]
+        if not run and behavior_blockers(project):
+            result["question"] = "\n".join(g.question for g in behavior_blockers(project))
+        elif not run and self._module_blocked(project):
+            result["question"] = "模块评审存在阻塞问题，请先修正模块范围或补充业务依据。"
         return result
+
+    @staticmethod
+    def _module_blocked(project):
+        return (project.clarification_policy == "evidence_only" and project.module_review
+                and any(f.severity in {"high", "critical", "error"} for f in project.module_review.findings))

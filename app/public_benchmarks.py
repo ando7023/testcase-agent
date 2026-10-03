@@ -418,10 +418,15 @@ class PublicBenchmarkService:
         max_steps: int = 12,
         llm_options: Optional[Dict[str, Any]] = None,
         on_event=None,
+        clarification_policy: str = "strict",
     ) -> Dict[str, Any]:
         limit = max(1, min(20, int(limit)))
         if mode not in {"offline", "live"}:
             raise ValueError("Benchmark mode must be offline or live")
+        if clarification_policy not in {"strict", "evidence_only"}:
+            raise ValueError("Invalid clarification policy")
+        if clarification_policy != "strict" and suite not in {"ebt_generation", "storyseek_pipeline"}:
+            raise ValueError("Behavior-level policy applies only to EBT/StorySeek pipelines")
         if execution not in {"workflow", "agentic"} or human_policy not in {"pause", "simulate_confirm"}:
             raise ValueError("Invalid benchmark execution or human policy")
         if type(max_steps) is not int or not 1 <= max_steps <= 20:
@@ -437,7 +442,8 @@ class PublicBenchmarkService:
             raise ValueError("Invalid benchmark model options")
         report_id = "BR-" + uuid.uuid4().hex[:12]
         workspace = self.data_root / "benchmark_runs" / report_id
-        runner = BenchmarkExecution(workspace, pipeline_factory, mode, execution, human_policy, max_steps, options, on_event)
+        runner = BenchmarkExecution(workspace, pipeline_factory, mode, execution, human_policy, max_steps, options, on_event,
+                                    clarification_policy=clarification_policy)
         if on_event:
             on_event({"event": "report_start", "report_id": report_id, "suite": suite, "mode": mode,
                       "execution": execution})
@@ -461,6 +467,7 @@ class PublicBenchmarkService:
             "requested_llm_config": options,
             "knowledge_policy": "sample_only",
             "human_policy": human_policy,
+            "clarification_policy": clarification_policy,
             "max_steps": max_steps if execution == "agentic" else None,
             "split": split if suite == "storyseek_pipeline" else "not_applicable",
             "workspace": str(workspace.relative_to(self.data_root)),

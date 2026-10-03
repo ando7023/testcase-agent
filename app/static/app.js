@@ -465,13 +465,21 @@ function renderBenchmarkReport(report) {
       const ms = v => v == null ? '未观测到' : `${(v / 1000).toFixed(2)}s`;
       return `调用 ${d.call} ${d.error_code} · 阶段 ${d.phase || '未知'} · 收到响应头 ${ms(d.connected_ms)} · 首事件 ${ms(d.first_event_ms)} · 最后接收 ${ms(d.last_receive_ms)} · 用时 ${ms(d.elapsed_ms)}`;
     }).join('\n');
-    return `<div class="benchmark-sample"><strong>${escapeHtml(sample.id)}</strong><span>${escapeHtml(sample.status)} · ${escapeHtml(outcomes)}</span>${sample.question ? `<small>${escapeHtml(sample.question)}</small>` : ''}${sample.error || sample.error_code ? `<small>${escapeHtml(sample.error || sample.error_code)}</small>` : ''}${sample.run_id ? `<small>运行 ${escapeHtml(sample.run_id)} · ${sample.steps} 步 · ${escapeHtml(sample.run_status)}</small>` : ''}${timing ? `<small>${escapeHtml(timing)}</small>` : ''}</div>`;
+    const gapLabels = {execution_detail: '执行前待补充', out_of_scope: '原文范围之外', behavior_blocker: '阻塞预期判断', unspecified: '待分类'};
+    const readiness = {blocked: '存在阻塞', needs_preparation: '需补充执行条件', not_assessed: '未验收可执行性'};
+    const gaps = [...(sample.clarification_items || []).map(g => ({kind: g.kind, text: g.question, reason: g.reason, ids: g.requirement_ids})),
+      ...(sample.review_clarifications || []).map(g => ({kind: g.clarification_kind, text: g.message, reason: g.clarification_reason, ids: g.requirement_ids}))];
+    const scope = sample.case_design_level ? `<small>设计层级：${sample.case_design_level === 'behavior' ? '行为级' : '面向执行'} · 执行准备：${escapeHtml(readiness[sample.execution_readiness] || '未评定')}</small>
+      <details><summary>范围与执行准备（${gaps.length} 项）</summary>${gaps.map(g => `<p><b>${escapeHtml(gapLabels[g.kind] || '待分类')}</b> · ${escapeHtml((g.ids || []).join('、'))}<br>${escapeHtml(g.text)}<br>${escapeHtml(g.reason || '')}</p>`).join('') || '<p>未记录澄清项，不代表已完成环境与接口验收。</p>'}
+      <p>受阻需求：${escapeHtml((sample.blocked_requirement_ids || []).join('、') || '无记录')}<br>尚无用例关联的需求：${escapeHtml((sample.uncovered_requirement_ids || []).join('、') || '无记录')}</p></details>` : '';
+    return `<div class="benchmark-sample"><strong>${escapeHtml(sample.id)}</strong><span>${escapeHtml(sample.status)} · ${escapeHtml(outcomes)}</span>${scope}${sample.question ? `<small>${escapeHtml(sample.question)}</small>` : ''}${sample.error || sample.error_code ? `<small>${escapeHtml(sample.error || sample.error_code)}</small>` : ''}${sample.run_id ? `<small>运行 ${escapeHtml(sample.run_id)} · ${sample.steps} 步 · ${escapeHtml(sample.run_status)}</small>` : ''}${timing ? `<small>${escapeHtml(timing)}</small>` : ''}</div>`;
   }).join('');
   $('#benchmark-result').innerHTML = `
     <div class="benchmark-score ${report.schema_version === 2 ? 'benchmark-score-v2' : ''}"><strong>${report.schema_version === 2 ? '分项' : Number(report.score || 0)}</strong><span>${escapeHtml(report.dataset_id)}<br>${report.sample_count || 0} samples · ${escapeHtml(report.mode || 'offline')} · ${escapeHtml(report.execution || '旧版固定流程')} · ${escapeHtml(report.status || '')}</span></div>
     <p class="benchmark-lead">${report.schema_version === 2 ? `${report.mode === 'offline' ? '离线规则回归，不代表模型能力。' : '模型评测；质量通过仅代表内部门禁，不代表独立业务验收。'} ${report.human_policy === 'simulate_confirm' ? '已选择模拟模块确认，不自动回答业务澄清或追加预算。' : '保留人工确认暂停。'} ${escapeHtml(report.metric_notes || '')}` : '旧版报告：综合分、passed 和成功率沿用旧口径，不能作为完整 Agentic 质量结论。'}</p>
     <div class="benchmark-metrics">${metrics}</div>
     ${configuration ? `<p class="benchmark-lead">实际配置：${escapeHtml(configuration)}</p>` : ''}
+    ${report.clarification_policy ? `<p class="benchmark-lead">澄清策略：${report.clarification_policy === 'evidence_only' ? '按原文生成行为级用例；通过只表示行为设计门禁通过，不代表可直接执行。' : '严格澄清；通过不替代实际环境验收。'}</p>` : ''}
     ${samples ? `<details class="benchmark-samples"><summary>查看样本明细</summary>${samples}</details>` : ''}`;
 }
 
@@ -509,6 +517,7 @@ function updateBenchmarkOptions() {
   $('#benchmark-execution').querySelector('[value="agentic"]').disabled = !allowsAgentic;
   if (!allowsAgentic) $('#benchmark-execution').value = 'workflow';
   $('#benchmark-human-policy').disabled = suite?.id !== 'ebt_generation';
+  $('#benchmark-clarification-policy').disabled = !allowsAgentic;
   $('#benchmark-max-steps').disabled = $('#benchmark-execution').value !== 'agentic';
   $('#benchmark-split').disabled = suite?.id !== 'storyseek_pipeline';
   $('#benchmark-limit').disabled = suite?.id === 'critic_mutation';
@@ -534,6 +543,7 @@ $('#benchmark-form').addEventListener('submit', async event => {
       mode,
       execution: $('#benchmark-execution').value,
       human_policy: $('#benchmark-human-policy').disabled ? 'pause' : $('#benchmark-human-policy').value,
+      clarification_policy: $('#benchmark-clarification-policy').disabled ? 'strict' : $('#benchmark-clarification-policy').value,
       max_steps: Number($('#benchmark-max-steps').value),
       stream: $('#benchmark-stream').value === 'true',
       reasoning_effort: $('#benchmark-reasoning').value,

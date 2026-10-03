@@ -33,6 +33,7 @@ class SupervisorStep(BaseModel):
 class SupervisorRun(BaseModel):
     id: str = Field(pattern=r"^AR-[a-f0-9]{32}$")
     project_id: str
+    clarification_policy: Literal["strict", "evidence_only"] = "strict"
     goal: str = Field(min_length=1, max_length=4000)
     mode: Literal["model", "deterministic"]
     status: Literal["running", "waiting_input", "waiting_confirmation", "completed", "budget_exhausted", "failed", "needs_attention"] = "running"

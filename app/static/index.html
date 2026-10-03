@@ -189,6 +189,8 @@ CheckEquipmentAvailability 只查询库存，不改变申请状态；UpdateBorro
           <p class="benchmark-lead">以上调用配置仅作用于本次评测，不继承手动脚本参数；模型仍使用服务端配置。流式不保证总耗时小于读取超时。</p>
           <label>执行方式<select id="benchmark-execution"><option value="workflow">Workflow 固定流程</option><option value="agentic">Agentic 动态编排</option></select></label>
           <label>模块确认策略<select id="benchmark-human-policy"><option value="pause">在确认点暂停</option><option value="simulate_confirm">模拟确认模块（仅评测，不代表人工验收）</option></select></label>
+          <label>澄清策略<select id="benchmark-clarification-policy"><option value="evidence_only">按原文生成行为级用例（适合短需求）</option><option value="strict">严格澄清（面向执行准备）</option></select></label>
+          <p class="benchmark-lead">行为级模式记录接口、错误码等执行缺口，不补造规则；影响预期结果的关键歧义仍会暂停。模拟确认只确认模块，不回答业务问题。</p>
           <label>Agentic 决策步数上限<input id="benchmark-max-steps" type="number" min="1" max="20" value="12"></label>
           <p id="benchmark-execution-note" class="benchmark-lead"></p>
           <button class="button primary" id="benchmark-run" type="submit">运行 Benchmark</button>
@@ -230,8 +232,8 @@ CheckEquipmentAvailability 只查询库存，不改变申请状态；UpdateBorro
     <p id="memory-version-restore-note">整体恢复包含项目产物、会话与决策记忆、项目长期事实、示例和 badcase；共享团队规则与运行历史保留。恢复前自动备份，恢复后重新确认模块和评审；后续人工拒绝不会被旧快照覆盖。</p>
     <button class="button primary" id="memory-version-restore" type="button" disabled>恢复到所选旧版本</button>
   </dialog>
-  <script src="/static/benchmark-chat.js?v=1"></script>
-  <script src="/static/app.js?v=benchmark-chat1"></script>
+  <script src="/static/benchmark-chat.js?v=clarification1"></script>
+  <script src="/static/app.js?v=clarification1"></script>
   <script src="/static/module-workspace.js?v=module4"></script>
   <script src="/static/case-workspace.js?v=feedback2"></script>
   <script src="/static/chunk-manager.js?v=chunk5"></script>
