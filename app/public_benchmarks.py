@@ -492,6 +492,7 @@ class PublicBenchmarkService:
             if requirement_id not in artifacts:
                 continue
             requirement = artifacts[requirement_id].content
+            benchmark_evidence = self.ebt.build_sample_evidence(requirement_id)
             gold_tests = [
                 artifacts[test_id].content
                 for test_id in links[requirement_id]
@@ -525,15 +526,23 @@ class PublicBenchmarkService:
                     "critic_score": project.review.score if project.review else 0,
                 })
                 return outcome
-            samples.append(runner.sample(requirement_id, evaluate))
+            samples.append(
+                runner.sample(
+                    requirement_id,
+                    evaluate,
+                    benchmark_evidence=benchmark_evidence,
+                )
+            )
         measured = [item for item in samples if "generated_case_count" in item]
         metrics = {
             key: average(item.get(key, 0) for item in samples)
             for key in ("linked_test_recall", "mean_gold_token_recall", "traceability_ratio", "assertion_ratio")
         }
         return self._report("EBT-RAG-V1", samples, metrics, {
+            "knowledge_scope": "ebt_sample",
+            "evaluation_track": "reference_assisted",
             "measured_count": len(measured),
-            "metric_notes": "词汇召回和非空断言仅为代理指标；quality_passed 是内部评审门禁，不是独立业务验收。"})
+            "metric_notes": "参考资料辅助评测：输入含关联测试制品及 Trace，黄金用例重合率受参考资料影响，不能作为独立生成能力指标。quality_passed 是内部评审门禁，不是独立业务验收。"})
 
     def _run_storyseek(
         self, runner: BenchmarkExecution, limit: int, split: str

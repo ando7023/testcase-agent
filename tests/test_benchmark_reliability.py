@@ -12,7 +12,7 @@ from unittest.mock import patch
 from app.agents import CaseReviewAgent, ModuleCriticAgent
 from app.benchmark_execution import BenchmarkExecution
 from app.llm import LLMError, OpenAICompatibleClient
-from app.models import ModuleTree, RequirementAnalysis, TestCase
+from app.models import KnowledgeDocument, ModuleTree, RequirementAnalysis, TestCase
 from app.observability import TraceManager
 from app.orchestrator import TestCaseOrchestrator
 from app.semantic_review import review_cases
@@ -51,6 +51,33 @@ class BenchmarkReliabilityTest(unittest.TestCase):
         self.assertNotIn("Borrow", statements)
         self.assertNotIn("设备", statements)
         self.assertEqual(len(project.analysis.atomic_requirements), 1)
+
+    def test_sample_scoped_ebt_evidence_is_retrievable_without_global_knowledge(self):
+        worker = self.factory(self.root)
+        evidence = [
+            {
+                "id": "EBT-SAMPLE-TEST-143",
+                "title": "EBT linked test artifact 143",
+                "content": "Test case: subscriber registers with subscriber manager. Postconditions: subscriber is registered under the subscriber manager.",
+                "doc_type": "benchmark_evidence",
+                "source": "thearod5/ebt",
+                "source_id": "EBT-RAG-V1-103",
+                "metadata": {
+                    "scope": "benchmark_sample",
+                    "benchmark_id": "EBT-RAG-V1-103",
+                    "artifact_id": "143",
+                    "evidence_kind": "linked_test_example",
+                    "ticket_type": "COMMON",
+                },
+            }
+        ]
+        worker.benchmark_evidence = [KnowledgeDocument.model_validate(item) for item in evidence]
+
+        context = worker._retrieve("subscriber registers postconditions")
+
+        self.assertTrue(context.hits)
+        self.assertEqual(context.hits[0].document_id, "EBT-SAMPLE-TEST-143")
+        self.assertEqual(worker.store.project_knowledge(""), [])
 
     def test_application_still_has_builtin_knowledge(self):
         worker = TestCaseOrchestrator(JsonStore(self.root))

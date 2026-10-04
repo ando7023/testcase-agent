@@ -120,6 +120,27 @@ class PublicBenchmarkTests(unittest.TestCase):
         self.assertGreater(sample["generated_case_count"], 0)
         self.assertEqual(sample["simulated_confirmations"], [])
         self.assertFalse(result["module_confirmation_required"])
+        self.assertEqual(result["knowledge_scope"], "ebt_sample")
+        self.assertTrue(sample["knowledge_document_ids"])
+        self.assertEqual(result["evaluation_track"], "reference_assisted")
+
+    def test_ebt_evidence_survives_reload_and_reaches_all_worker_policies(self):
+        result = PublicBenchmarkService(self.root, self._ebt()).run(
+            "ebt_generation", 1, "test", "offline",
+            lambda root: TestCaseOrchestrator(JsonStore(root), knowledge_policy="sample_only"),
+            clarification_policy="evidence_only")
+        sample = result["samples"][0]
+        root = self.root / result["workspace"] / sample["workspace"]
+        worker = TestCaseOrchestrator(JsonStore(root), knowledge_policy="sample_only")
+        project = worker.store.get_project(sample["project_id"])
+        self.assertEqual({d.id for d in project.benchmark_evidence}, set(sample["knowledge_document_ids"]))
+        context = worker._context(project.requirement, project_id=project.id)
+        self.assertIn("EBT-SAMPLE-TEST-141", context["input_evidence"])
+        from app.clarification_policy import policy_system
+        self.assertIn("Postconditions result is visible", policy_system("Review", context))
+        self.assertEqual(worker.store.list_knowledge(), [])
+        other = worker.store.create_project("Other", "Another isolated requirement.")
+        self.assertEqual(worker._retrieve("submit request", project_id=other.id).hits, [])
 
     def test_agentic_runs_supervisor_and_explicit_confirmation(self):
         result = self._run(execution="agentic", human_policy="simulate_confirm")

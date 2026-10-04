@@ -51,6 +51,7 @@ class AtomicRequirement(BaseModel):
     actors: List[str] = Field(default_factory=list)
     conditions: List[str] = Field(default_factory=list)
     source_quote: str = ""
+    evidence_ids: List[str] = Field(default_factory=list)
 
 
 class InterfaceContract(BaseModel):
@@ -95,6 +96,7 @@ class ClarificationItem(BaseModel):
     source_quote: str = Field(min_length=1, max_length=2000)
     reason: str = Field(min_length=1, max_length=1500)
     ambiguity_ids: List[str] = Field(default_factory=list)
+    evidence_ids: List[str] = Field(default_factory=list)
 
 
 class RequirementAnalysis(BaseModel):
@@ -479,6 +481,7 @@ class AdaptiveMemoryContext(BaseModel):
 
 
 class ProjectState(BaseModel):
+    benchmark_evidence: List["KnowledgeDocument"] = Field(default_factory=list)
     id: str
     title: str
     requirement: str
@@ -618,3 +621,4 @@ class RetrievalEvaluationReport(BaseModel):
 
 TestModule.model_rebuild()
 MindMapNode.model_rebuild()
+ProjectState.model_rebuild()

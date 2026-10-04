@@ -451,7 +451,8 @@ function benchmarkMetricValue(key, value) {
 
 function renderBenchmarkReport(report) {
   const config = report.samples?.find(s => s.llm_config)?.llm_config;
-  const configuration = config ? `${config.model} · ${config.stream ? '流式' : '非流式'} · reasoning=${config.reasoning_effort || '默认'} · 读取超时 ${config.timeout_seconds}s · 输出上限 ${config.max_tokens || '服务默认'} · 知识仅来自样本` : '';
+  const knowledgeScope = report.knowledge_scope === 'ebt_sample' ? 'EBT样本级证据' : '知识仅来自样本';
+  const configuration = config ? `${config.model} · ${config.stream ? '流式' : '非流式'} · reasoning=${config.reasoning_effort || '默认'} · 读取超时 ${config.timeout_seconds}s · 输出上限 ${config.max_tokens || '服务默认'} · ${knowledgeScope}` : '';
   const metrics = Object.entries(report.metrics || {}).map(([key, value]) => `
     <div><strong>${benchmarkMetricValue(key, value)}</strong><span>${escapeHtml(benchmarkLabels[key] || key)}</span></div>`).join('');
   const samples = (report.samples || []).map(sample => {
@@ -474,7 +475,8 @@ function renderBenchmarkReport(report) {
     const scope = sample.case_design_level ? `<small>设计层级：${sample.case_design_level === 'behavior' ? '行为级' : '面向执行'} · 执行准备：${escapeHtml(readiness[sample.execution_readiness] || '未评定')}</small>
       <details><summary>范围与执行准备（${gaps.length} 项）</summary>${gaps.map(g => `<p><b>${escapeHtml(gapLabels[g.kind] || '待分类')}</b> · ${escapeHtml((g.ids || []).join('、'))}<br>${escapeHtml(g.text)}<br>${escapeHtml(g.reason || '')}</p>`).join('') || '<p>未记录澄清项，不代表已完成环境与接口验收。</p>'}
       <p>受阻需求：${escapeHtml((sample.blocked_requirement_ids || []).join('、') || '无记录')}<br>尚无用例关联的需求：${escapeHtml((sample.uncovered_requirement_ids || []).join('、') || '无记录')}</p></details>` : '';
-    return `<div class="benchmark-sample"><strong>${escapeHtml(sample.id)}</strong><span>${escapeHtml(sample.status)} · ${escapeHtml(outcomes)}</span>${scope}${sample.question ? `<small>${escapeHtml(sample.question)}</small>` : ''}${sample.error || sample.error_code ? `<small>${escapeHtml(sample.error || sample.error_code)}</small>` : ''}${sample.run_id ? `<small>运行 ${escapeHtml(sample.run_id)} · ${sample.steps} 步 · ${escapeHtml(sample.run_status)}</small>` : ''}${timing ? `<small>${escapeHtml(timing)}</small>` : ''}</div>`;
+    const evidence = sample.knowledge_scope === 'ebt_sample' ? `<small>知识范围：当前 EBT 样本证据（${(sample.knowledge_document_ids || []).length} 份），未写入全局 RAG</small>` : '';
+    return `<div class="benchmark-sample"><strong>${escapeHtml(sample.id)}</strong><span>${escapeHtml(sample.status)} · ${escapeHtml(outcomes)}</span>${evidence}${scope}${sample.question ? `<small>${escapeHtml(sample.question)}</small>` : ''}${sample.error || sample.error_code ? `<small>${escapeHtml(sample.error || sample.error_code)}</small>` : ''}${sample.run_id ? `<small>运行 ${escapeHtml(sample.run_id)} · ${sample.steps} 步 · ${escapeHtml(sample.run_status)}</small>` : ''}${timing ? `<small>${escapeHtml(timing)}</small>` : ''}</div>`;
   }).join('');
   $('#benchmark-result').innerHTML = `
     <div class="benchmark-score ${report.schema_version === 2 ? 'benchmark-score-v2' : ''}"><strong>${report.schema_version === 2 ? '分项' : Number(report.score || 0)}</strong><span>${escapeHtml(report.dataset_id)}<br>${report.sample_count || 0} samples · ${escapeHtml(report.mode || 'offline')} · ${escapeHtml(report.execution || '旧版固定流程')} · ${escapeHtml(report.status || '')}</span></div>

@@ -82,6 +82,22 @@ class ClarificationPolicyTests(unittest.TestCase):
                 self.assertTrue(is_blocking(report.findings[0], "evidence_only"))
                 self.assertEqual(result["cases"][0]["review_status"], "needs_attention")
 
+    def test_review_checks_supplied_evidence_with_same_source_as_analysis(self):
+        quote = "A valid subscriber manager is available."
+        generate = Mock(return_value={"findings": [finding(evidence=quote)]})
+        agent = CaseReviewAgent(SimpleNamespace(enabled=True, generate_json=generate))
+        payload = {"requirement": RAW, "analysis": analysis().model_dump(),
+                   "module_tree": tree().model_dump(), "cases": [case().model_dump()]}
+        context = {"clarification_policy": "evidence_only",
+                   "input_evidence": {"EBT-TEST": {"content": quote}}}
+        result = agent.run(payload, context)
+        report = ReviewReport.model_validate(result["review"])
+        self.assertTrue(report.findings[0].clarification_basis_verified)
+        self.assertFalse(is_blocking(report.findings[0], "evidence_only"))
+        self.assertIn(quote, generate.call_args[0][1])
+        result = agent.run(payload, {"clarification_policy": "evidence_only"})
+        self.assertFalse(result["review"]["findings"][0]["clarification_basis_verified"])
+
     def test_unverified_or_legacy_clarifications_do_not_get_downgraded(self):
         for item in [finding(evidence="Invented quote"), finding(requirement_ids=["unknown"]),
                      finding(clarification_reason=""), finding(clarification_kind={}),

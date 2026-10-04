@@ -58,6 +58,22 @@ class EBTRepositoryTests(unittest.TestCase):
         self.assertEqual(status["positive_trace_count"], 2)
         self.assertEqual(status["retrieval_case_count"], 1)
 
+    def test_builds_requirement_scoped_evidence_without_persisting_it(self):
+        evidence = self.repository.build_sample_evidence("100")
+
+        self.assertEqual(
+            {item.metadata["evidence_kind"] for item in evidence},
+            {"requirement_source", "linked_test_example", "positive_trace_relation"},
+        )
+        self.assertEqual(
+            [item.metadata.get("artifact_id") for item in evidence
+             if item.metadata["evidence_kind"] == "linked_test_example"],
+            ["141", "142"],
+        )
+        self.assertTrue(all(item.metadata["scope"] == "benchmark_sample" for item in evidence))
+        self.assertTrue(all(item.source_id == "EBT-RAG-V1-100" for item in evidence))
+        self.assertTrue(all(item.doc_type == "benchmark_evidence" for item in evidence))
+
 
 if __name__ == "__main__":
     unittest.main()

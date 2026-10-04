@@ -112,6 +112,44 @@ class RequirementRepairTests(unittest.TestCase):
                 agent.run(RequirementInput(title="Trace", content=RAW), context)
             self.assertEqual(generate.call_count, 1)
 
+    def test_supplied_source_quote_requires_valid_citation(self):
+        evidence = {"EBT-SAMPLE-TEST-143": {"content": "The subscriber is registered under the subscriber manager."}}
+        data = valid()
+        data["atomic_requirements"][0].update(source_quote=evidence["EBT-SAMPLE-TEST-143"]["content"],
+                                             evidence_ids=["EBT-SAMPLE-TEST-143"])
+        model = RequirementAnalysis.model_validate(data)
+        validate_analysis(model, RAW, evidence)
+        for references in ([], ["another-sample"], ["EBT-SAMPLE-TEST-143", "invented"]):
+            bad = model.model_copy(deep=True)
+            bad.atomic_requirements[0].evidence_ids = references
+            with self.assertRaises(LLMError):
+                validate_analysis(bad, RAW, evidence)
+        with self.assertRaises(LLMError):
+            validate_analysis(model, RAW)  # Ordinary RAG cannot authorize new input evidence.
+        model.atomic_requirements[0].source_quote = "Registration always succeeds."
+        with self.assertRaises(LLMError):
+            validate_analysis(model, RAW, evidence)
+
+    def test_evidence_citation_correction_and_clarification_are_grounded(self):
+        quote = "The subscriber is registered under the subscriber manager."
+        evidence = {"EBT-SAMPLE-TEST-143": {"content": quote}}
+        bad = valid()
+        bad["atomic_requirements"][0]["source_quote"] = quote
+        fixed = valid()
+        fixed["atomic_requirements"][0].update(source_quote=quote, evidence_ids=["EBT-SAMPLE-TEST-143"])
+        fixed["clarification_items"] = [{"id": "G1", "kind": "execution_detail", "question": "Which registration interface?",
+            "requirement_ids": ["R1"], "affected_scenarios": ["Registration"], "source_quote": quote,
+            "evidence_ids": ["EBT-SAMPLE-TEST-143"], "reason": "Outcome is defined, invocation is not."}]
+        agent, generate, context = self.execute([bad, fixed])
+        context["input_evidence"] = evidence
+        result = agent.run(RequirementInput(title="Registration", content=RAW), context)
+        self.assertEqual(generate.call_count, 2)
+        self.assertEqual(result.atomic_requirements[0].evidence_ids, ["EBT-SAMPLE-TEST-143"])
+        self.assertIn(quote, generate.call_args_list[0][0][0])
+        result.clarification_items[0].evidence_ids = []
+        with self.assertRaises(LLMError):
+            validate_analysis(result, RAW, evidence)
+
 
 if __name__ == "__main__":
     unittest.main()

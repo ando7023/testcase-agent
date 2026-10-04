@@ -23,13 +23,14 @@ class BenchmarkExecution:
         if self.on_event:
             self.on_event(event)
 
-    def sample(self, sample_id, operation, quality_applicable=True):
+    def sample(self, sample_id, operation, quality_applicable=True, benchmark_evidence=None):
         self.count += 1
         self.emit({"event": "sample_start", "sample_id": sample_id, "sample_index": self.count})
         # Index rather than external sample ID: neither traversal nor duplicate IDs
         # can cause different samples to share state.
         worker = self.factory(self.workspace / "sample-{:04d}".format(self.count))
         worker.knowledge_policy = "sample_only"
+        worker.benchmark_evidence = list(benchmark_evidence or [])
         worker.clarification_policy = self.clarification_policy
         worker.harness.allow_fallback = self.mode != "live"
         worker.llm.strict_review_failures = self.mode == "live"
@@ -140,7 +141,10 @@ class BenchmarkExecution:
             result["status"] = ("passed" if result["quality_passed"] is True else
                                 "quality_failed" if result["quality_passed"] is False else "completed")
         result.update(seconds=round(time.perf_counter() - start, 3), llm_calls=len(calls),
-                      knowledge_policy="sample_only", llm_config=worker.llm.effective_settings(),
+                      knowledge_policy="sample_only",
+                      knowledge_scope=("ebt_sample" if worker.benchmark_evidence else "none"),
+                      knowledge_document_ids=[item.id for item in worker.benchmark_evidence],
+                      llm_config=worker.llm.effective_settings(),
                       call_diagnostics=diagnostics,
                       llm_error_count=len(failures), worker_modes=modes,
                       validation_level="model" if self.mode == "live" else "offline_structural",
@@ -167,6 +171,7 @@ class BenchmarkExecution:
 
     def pipeline(self, worker, title, requirement, target="cases"):
         project = worker.store.create_project(title, requirement)
+        project.benchmark_evidence = list(worker.benchmark_evidence)
         project.clarification_policy = self.clarification_policy
         worker.store.save_project(project)
         run = None

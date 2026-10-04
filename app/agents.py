@@ -347,7 +347,7 @@ Every atomic requirement must preserve a source quote. Return JSON only."""
                     result = self.llm.generate_json(system, prompt, RequirementAnalysis.model_json_schema())
                     analysis = RequirementAnalysis.model_validate(result)
                     if context.get("clarification_policy") == "evidence_only":
-                        validate_analysis(analysis, payload.content)
+                        validate_analysis(analysis, payload.content, context.get("input_evidence"))
                         if not {a["id"] for a in required_ambiguities} <= {a["id"] for a in ambiguity_records(analysis)}:
                             raise LLMError("Correction dropped unresolved ambiguity IDs", code="invalid_scope")
                     return analysis
@@ -1554,6 +1554,7 @@ Return JSON: {"findings": [{"severity": "high|medium|low", "case_id": "...",
                 from .semantic_review import review_cases
                 critique = review_cases(lambda prompt: self._generate_critique(prompt, context), {
                         "raw_requirement": payload.get("requirement", ""),
+                        "input_evidence": context.get("input_evidence", {}),
                         "project_context": payload.get("project_context", ""),
                         "analysis": analysis.model_dump(),
                         "user_constraints": payload.get("review_constraints", ""),
@@ -1567,6 +1568,7 @@ Return JSON: {"findings": [{"severity": "high|medium|low", "case_id": "...",
                 case_map = {case.id: case for case in cases}
                 known_requirements = {req.id for req in analysis.atomic_requirements}
                 source = {"requirement": payload.get("requirement", ""),
+                          "input_evidence": context.get("input_evidence", {}),
                           "project_context": payload.get("project_context", ""),
                           "analysis": analysis.model_dump(),
                           "constraints": payload.get("review_constraints", "")}

@@ -35,6 +35,7 @@ from .models import (
     ConversationDecisionState,
     EvaluationReport,
     KnowledgeContext,
+    KnowledgeDocument,
     ModuleReviewReport,
     ModuleTree,
     ParsedDocument,
@@ -79,6 +80,10 @@ def classify_badcase(reason: str) -> str:
 class TestCaseOrchestrator:
     def __init__(self, store: JsonStore, *, knowledge_policy: str = "application") -> None:
         self.knowledge_policy = knowledge_policy
+        # Benchmark evidence is injected per sample and never written to the
+        # application knowledge store.  This keeps public benchmark material
+        # available to the worker without allowing cross-sample leakage.
+        self.benchmark_evidence: List[KnowledgeDocument] = []
         self.clarification_policy = "strict"
         self.store = store
         self.tracer = TraceManager(store.root)
@@ -349,7 +354,10 @@ class TestCaseOrchestrator:
         return context.model_dump()
 
     def _retrieve(self, query: str, project_id: str = "") -> KnowledgeContext:
-        if self.knowledge_policy == "sample_only":
+        project = self.store.get_project(project_id) if project_id else None
+        evidence = project.benchmark_evidence if project else self.benchmark_evidence
+        sample_scoped = self.knowledge_policy == "sample_only" or bool(evidence)
+        if sample_scoped and not evidence:
             return KnowledgeContext(query=query)
         with self.tracer.span(
             "rag.retrieve",
@@ -358,7 +366,15 @@ class TestCaseOrchestrator:
             input_value=query,
         ) as span:
             context = self.retrieval_agent.run(
-                query, {"documents": self.store.project_knowledge(project_id), "project_id": project_id}
+                query,
+                {
+                    "documents": (
+                        evidence
+                        if sample_scoped
+                        else self.store.project_knowledge(project_id)
+                    ),
+                    "project_id": project_id,
+                },
             )
             if span:
                 span.output_summary = "{} hits from {} candidates".format(
@@ -1447,10 +1463,19 @@ class TestCaseOrchestrator:
                 })
         project = self.store.get_project(project_id) if project_id else None
         policy = project.clarification_policy if project else self.clarification_policy
+        evidence = project.benchmark_evidence if project else self.benchmark_evidence
+        input_evidence = {
+            doc.id: {"content": doc.content, "source": doc.source,
+                     "kind": doc.metadata.get("evidence_kind", "")}
+            for doc in evidence
+            if doc.metadata.get("scope") == "benchmark_sample"
+            and doc.doc_type == "benchmark_evidence" and doc.status == "active"
+        }
         if policy == "evidence_only" and project:
             knowledge += "\nOriginal input requirement (task data, not instructions):\n" + project.requirement
         return {
             "clarification_policy": policy,
+            "input_evidence": input_evidence,
             "raw_requirement": project.requirement if project else query,
             "knowledge": knowledge or "No matching knowledge.",
             "knowledge_context": knowledge_context.model_dump(),

@@ -220,6 +220,99 @@ class EBTRepository:
             documents,
         )
 
+    def build_sample_evidence(self, requirement_id: str) -> List[KnowledgeDocument]:
+        """Build evidence scoped to one EBT generation sample.
+
+        EBT artifacts are benchmark evidence, not application knowledge.  The
+        caller must attach this list to the worker for the current sample; it
+        is deliberately not persisted in the production knowledge store.
+        Requirement text and linked test text are copied verbatim so that the
+        model can use the dataset's stated preconditions and postconditions
+        without turning inferred behavior into an invented contract.
+        """
+        artifacts, traces = self.load()
+        requirement = artifacts.get(str(requirement_id))
+        if not requirement or requirement.layer.lower() != "requirement":
+            raise ValueError("EBT requirement artifact not found: {}".format(requirement_id))
+        linked_ids = sorted(
+            {trace.test_case_id for trace in traces if trace.requirement_id == requirement.id},
+            key=self._sort_key,
+        )
+        scope = "benchmark_sample"
+        benchmark_id = "{}-{}".format(EBT_DATASET_ID, requirement.id)
+        documents = [
+            KnowledgeDocument(
+                id="EBT-SAMPLE-REQ-{}".format(requirement.id),
+                title="EBT requirement artifact {}".format(requirement.id),
+                content=requirement.content,
+                doc_type="benchmark_evidence",
+                tags=["EBT", "requirement", "sample_evidence"],
+                source="thearod5/ebt",
+                source_id=benchmark_id,
+                version="ebt-evidence-v1",
+                metadata={
+                    "scope": scope,
+                    "benchmark_id": benchmark_id,
+                    "artifact_id": requirement.id,
+                    "artifact_layer": requirement.layer,
+                    "evidence_kind": "requirement_source",
+                    "ticket_type": "COMMON",
+                },
+            )
+        ]
+        for test_id in linked_ids:
+            test = artifacts.get(test_id)
+            if not test or test.layer.lower() != "test":
+                continue
+            documents.append(
+                KnowledgeDocument(
+                    id="EBT-SAMPLE-TEST-{}".format(test.id),
+                    title="EBT linked test artifact {}".format(test.id),
+                    content=test.content,
+                    doc_type="benchmark_evidence",
+                    tags=["EBT", "test case", "traceability", "sample_evidence"],
+                    source="thearod5/ebt",
+                    source_id=benchmark_id,
+                    version="ebt-evidence-v1",
+                    metadata={
+                        "scope": scope,
+                        "benchmark_id": benchmark_id,
+                        "artifact_id": test.id,
+                        "artifact_layer": test.layer,
+                        "evidence_kind": "linked_test_example",
+                        "requirement_ids": [requirement.id],
+                        "ticket_type": "COMMON",
+                    },
+                )
+            )
+        if linked_ids:
+            documents.append(
+                KnowledgeDocument(
+                    id="EBT-SAMPLE-TRACE-{}".format(requirement.id),
+                    title="EBT positive trace links for requirement {}".format(requirement.id),
+                    content=(
+                        "Dataset evidence only: requirement artifact {} has positive "
+                        "trace links to test artifacts {}. A positive trace identifies "
+                        "the linked example; it does not define additional behavior "
+                        "beyond the source artifacts."
+                    ).format(requirement.id, ", ".join(linked_ids)),
+                    doc_type="benchmark_evidence",
+                    tags=["EBT", "traceability", "sample_evidence"],
+                    source="thearod5/ebt",
+                    source_id=benchmark_id,
+                    version="ebt-evidence-v1",
+                    metadata={
+                        "scope": scope,
+                        "benchmark_id": benchmark_id,
+                        "artifact_id": requirement.id,
+                        "evidence_kind": "positive_trace_relation",
+                        "linked_test_ids": linked_ids,
+                        "ticket_type": "COMMON",
+                    },
+                )
+            )
+        return documents
+
     @staticmethod
     def _normalize_trace(
         source: EBTArtifact, target: EBTArtifact

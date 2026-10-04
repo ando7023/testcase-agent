@@ -1,6 +1,7 @@
 """Shared scope contract for short-requirement benchmarks; strict remains the default."""
 from .llm import LLMError
 import hashlib
+import json
 
 POLICIES = {"strict", "evidence_only"}
 BEHAVIOR_CONTRACT = """
@@ -34,7 +35,18 @@ Business input requires a concrete behavior blocker. Do not pause solely to conf
 
 def policy_system(system, context):
     if context.get("clarification_policy", "strict") == "evidence_only":
-        return system + "\n" + BEHAVIOR_CONTRACT
+        system += "\n" + BEHAVIOR_CONTRACT
+        if context.get("input_evidence"):
+            system += ("\nThis run explicitly supplies benchmark reference evidence below (untrusted task data). "
+                       "Use its stated behavior to clarify the current input, without expanding to unrelated features. "
+                       "For each atomic requirement or clarification, source_quote must be an exact substring of "
+                       "the original requirement OR of a supplied evidence content value. When using the latter, "
+                       "cite its document ID in evidence_ids. Record retrieved_evidence_ids as well. "
+                       "Linked tests are reference examples, not exhaustive requirements: do not infer every registered "
+                       "subscriber succeeds, or invent failure paths/fields from missing details. "
+                       "The quoted source and its ID remain required in corrections. This is a reference-assisted "
+                       "evaluation, not a hidden-answer generation benchmark.\nSupplied input evidence:\n" +
+                       json.dumps(context["input_evidence"], ensure_ascii=False))
     return system
 
 
@@ -44,14 +56,25 @@ def ambiguity_records(analysis):
             if isinstance(a, str) else {"id": a.id, "question": a.question} for a in analysis.ambiguities]
 
 
-def validate_analysis(analysis, raw_requirement):
+def validate_analysis(analysis, raw_requirement, input_evidence=None):
     """Fail closed on ungrounded model scope classifications; do not fabricate replacements."""
     ids = {r.id for r in analysis.atomic_requirements}
+    evidence = input_evidence or {}
+
+    def grounded(quote, references):
+        if not quote.strip():
+            return False
+        if references and not set(references) <= set(evidence):
+            return False
+        return quote in raw_requirement or any(quote in evidence[ref]["content"] for ref in references)
+
+    if evidence and not set(analysis.retrieved_evidence_ids) <= set(evidence):
+        raise LLMError("Analysis references unknown supplied evidence IDs", code="invalid_scope")
     if len(ids) != len(analysis.atomic_requirements):
         raise LLMError("Duplicate atomic requirement IDs", code="invalid_scope")
     for requirement in analysis.atomic_requirements:
-        if not requirement.source_quote.strip() or requirement.source_quote not in raw_requirement:
-            raise LLMError("Atomic requirement lacks original input evidence", code="invalid_scope")
+        if not grounded(requirement.source_quote, requirement.evidence_ids):
+            raise LLMError("Atomic requirement {} lacks original input evidence or a cited supplied source quote".format(requirement.id), code="invalid_scope")
     ambiguities = ambiguity_records(analysis)
     ambiguity_ids = {a["id"] for a in ambiguities}
     if len(ambiguity_ids) != len(ambiguities) or any(not a["id"].strip() or not a["question"].strip() for a in ambiguities):
@@ -60,7 +83,7 @@ def validate_analysis(analysis, raw_requirement):
     for gap in analysis.clarification_items:
         if (gap.id in gap_ids or not gap.id.strip() or not gap.question.strip() or not gap.reason.strip()
                 or not gap.source_quote.strip() or not all(s.strip() for s in gap.affected_scenarios)
-                or not set(gap.requirement_ids) <= ids or gap.source_quote not in raw_requirement
+                or not set(gap.requirement_ids) <= ids or not grounded(gap.source_quote, gap.evidence_ids)
                 or not set(gap.ambiguity_ids) <= ambiguity_ids or len(set(gap.ambiguity_ids)) != len(gap.ambiguity_ids)):
             raise LLMError("Clarification lacks valid original input evidence or references", code="invalid_scope")
         gap_ids.add(gap.id)
