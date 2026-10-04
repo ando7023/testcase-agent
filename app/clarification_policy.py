@@ -1,5 +1,6 @@
 """Shared scope contract for short-requirement benchmarks; strict remains the default."""
 from .llm import LLMError
+import hashlib
 
 POLICIES = {"strict", "evidence_only"}
 BEHAVIOR_CONTRACT = """
@@ -19,7 +20,10 @@ Do not require functional/boundary/exception cases universally. Choose types onl
 establish a trace. It does NOT promise every registered subscriber succeeds; cancelled/expired is not unregistered.
 For analysis: populate clarification_items with id, kind (execution_detail|out_of_scope|behavior_blocker), question,
 requirement_ids, affected_scenarios, source_quote copied from raw input, and reason. Use an empty list if none.
-Each ambiguities entry must have a corresponding clarification_items question. Never silently omit a real blocker.
+For new analysis, each ambiguities entry is {id, question}. Link it through clarification_items.ambiguity_ids.
+Use stable IDs; classification question wording may differ. Every ambiguity ID must be classified; references must
+exist and classifications must not conflict. Preserve IDs on correction; never delete a gap to pass validation.
+Legacy text entries may be retained with exactly matching classification questions, or migrated using the supplied IDs.
 For case critique clarifications: return clarification_kind and clarification_reason, exact evidence and affected
 requirement_ids. An invented acceptance assertion is a defect, NOT an execution_detail clarification.
 High/critical/error findings and review_incomplete still block. No hidden answers or simulated business facts.
@@ -34,6 +38,12 @@ def policy_system(system, context):
     return system
 
 
+def ambiguity_records(analysis):
+    """Stable identifiers for structured gaps and unchanged legacy text; no semantic guessing."""
+    return [{"id": "LEG-" + hashlib.sha256(a.strip().encode()).hexdigest()[:24], "question": a.strip()}
+            if isinstance(a, str) else {"id": a.id, "question": a.question} for a in analysis.ambiguities]
+
+
 def validate_analysis(analysis, raw_requirement):
     """Fail closed on ungrounded model scope classifications; do not fabricate replacements."""
     ids = {r.id for r in analysis.atomic_requirements}
@@ -42,16 +52,25 @@ def validate_analysis(analysis, raw_requirement):
     for requirement in analysis.atomic_requirements:
         if not requirement.source_quote.strip() or requirement.source_quote not in raw_requirement:
             raise LLMError("Atomic requirement lacks original input evidence", code="invalid_scope")
+    ambiguities = ambiguity_records(analysis)
+    ambiguity_ids = {a["id"] for a in ambiguities}
+    if len(ambiguity_ids) != len(ambiguities) or any(not a["id"].strip() or not a["question"].strip() for a in ambiguities):
+        raise LLMError("Ambiguity IDs must be unique and questions nonempty", code="invalid_scope")
     gap_ids = set()
     for gap in analysis.clarification_items:
         if (gap.id in gap_ids or not gap.id.strip() or not gap.question.strip() or not gap.reason.strip()
                 or not gap.source_quote.strip() or not all(s.strip() for s in gap.affected_scenarios)
-                or not set(gap.requirement_ids) <= ids or gap.source_quote not in raw_requirement):
+                or not set(gap.requirement_ids) <= ids or gap.source_quote not in raw_requirement
+                or not set(gap.ambiguity_ids) <= ambiguity_ids or len(set(gap.ambiguity_ids)) != len(gap.ambiguity_ids)):
             raise LLMError("Clarification lacks valid original input evidence or references", code="invalid_scope")
         gap_ids.add(gap.id)
-    questions = {g.question.strip() for g in analysis.clarification_items}
-    if any(a.strip() not in questions for a in analysis.ambiguities):
-        raise LLMError("Ambiguity was not classified; cannot assume nonblocking", code="invalid_scope")
+    for original, record in zip(analysis.ambiguities, ambiguities):
+        linked = [g for g in analysis.clarification_items if record["id"] in g.ambiguity_ids
+                  or (isinstance(original, str) and original.strip() == g.question.strip())]
+        if not linked:
+            raise LLMError("Ambiguity {} was not classified; cannot assume nonblocking".format(record["id"]), code="invalid_scope")
+        if len({g.kind for g in linked}) != 1:
+            raise LLMError("Ambiguity {} has conflicting classifications".format(record["id"]), code="invalid_scope")
 
 
 def behavior_blockers(project):

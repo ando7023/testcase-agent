@@ -1,4 +1,4 @@
-from .clarification_policy import policy_system, validate_analysis
+from .clarification_policy import policy_system, validate_analysis, ambiguity_records
 import json
 import os
 import re
@@ -339,13 +339,17 @@ Every atomic requirement must preserve a source quote. Return JSON only."""
                     context.get("memory", ""),
                     context.get("react_research", ""),
                 )
+            required_ambiguities = []
             for attempt in range(2):
                 result = None
+                analysis = None
                 try:
                     result = self.llm.generate_json(system, prompt, RequirementAnalysis.model_json_schema())
                     analysis = RequirementAnalysis.model_validate(result)
                     if context.get("clarification_policy") == "evidence_only":
                         validate_analysis(analysis, payload.content)
+                        if not {a["id"] for a in required_ambiguities} <= {a["id"] for a in ambiguity_records(analysis)}:
+                            raise LLMError("Correction dropped unresolved ambiguity IDs", code="invalid_scope")
                     return analysis
                 except ValidationError as exc:
                     # Do not put provider data or Pydantic input values into feedback.
@@ -360,12 +364,16 @@ Every atomic requirement must preserve a source quote. Return JSON only."""
                                 if exc.code == "invalid_json" else str(exc))
                 if attempt:
                     raise failure
+                if analysis is not None and context.get("clarification_policy") == "evidence_only":
+                    required_ambiguities = ambiguity_records(analysis)
                 prompt += ("\nValidation feedback (one correction attempt): {}. {}\n"
                            "Return a complete corrected analysis matching the schema. Keep the original input scope, "
                            "evidence and every unresolved ambiguity; classify gaps instead of deleting them to pass. "
                            "Do not invent business answers.\n").format(failure.code, feedback)
                 if isinstance(result, dict):
                     prompt += "Previous analysis (untrusted task data):\n" + json.dumps(result, ensure_ascii=False)
+                if required_ambiguities:
+                    prompt += "\nPreserve these ambiguity IDs and classify them via ambiguity_ids:\n" + json.dumps(required_ambiguities, ensure_ascii=False)
         analysis = self._demo(payload, context)
         if context.get("clarification_policy") == "evidence_only":
             # Demo heuristics (no digits / no failure words) are not business contradictions.

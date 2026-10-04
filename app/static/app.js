@@ -111,7 +111,7 @@ function renderAnalysis() {
         <div class="section-block"><h3>工单与角色</h3><div class="tag-list">${(analysis.ticket_types || []).concat(analysis.actors || []).map(item => `<span class="tag">${escapeHtml(item)}</span>`).join('')}</div></div>
         <div class="section-block"><h3>风险提示</h3><div class="tag-list">${analysis.risk_hints.map(item => `<span class="tag risk">${escapeHtml(item)}</span>`).join('')}</div></div>
         <div class="section-block"><h3>RAG 证据</h3><div class="evidence-list">${evidence.map(id => `<span>${escapeHtml(id)}</span>`).join('')}</div></div>
-        <div class="section-block"><h3>待确认项</h3><ul class="ambiguity-list">${analysis.ambiguities.map(item => `<li>${escapeHtml(item)}</li>`).join('') || '<li>未识别到明显歧义</li>'}</ul></div>
+        <div class="section-block"><h3>待确认项</h3><ul class="ambiguity-list">${analysis.ambiguities.map(item => `<li>${escapeHtml(typeof item === 'string' ? item : `${item.id} · ${item.question}`)}</li>`).join('') || '<li>未识别到明显歧义</li>'}</ul></div>
       </div>
     </div>
     ${interfaces.length ? `<div class="domain-section"><div class="domain-heading"><span class="eyebrow">INTERFACES</span><h2>接口契约</h2></div><div class="contract-list">${interfaces.map(item => `<article><div><strong>${escapeHtml(item.name)}</strong><span>${escapeHtml(item.purpose)}</span></div><p><b>成功</b>${escapeHtml(item.success_condition)}</p><p><b>失败</b>${escapeHtml(item.failure_condition)}</p><small>${item.evidence_ids.map(id => escapeHtml(id)).join(' · ')}</small></article>`).join('')}</div></div>` : ''}
@@ -460,8 +460,9 @@ function renderBenchmarkReport(report) {
       .slice(0, 3)
       .map(([key, value]) => `${benchmarkLabels[key] || key} ${typeof value === 'boolean' ? (value ? '是' : '否') : (value <= 1 ? `${(value * 100).toFixed(0)}%` : value)}`)
       .join(' · ');
+    const failure = sample.technical_failure ? ` · 失败阶段 ${benchmarkLabels[sample.failure_stage] || sample.failure_stage || '未知'} · 错误 ${sample.failure_error_code || sample.error_code || '未知'}` : '';
     const outcomes = report.schema_version === 2
-      ? `流程 ${sample.flow_completed ? '完成' : '未完成'} · 质量门禁 ${sample.quality_passed === null ? '未评定' : sample.quality_passed ? '通过' : '未通过'} · 技术失败 ${sample.technical_failure ? '是' : '否'} · 降级 ${sample.degraded ? '是' : '否'}` : details;
+      ? `流程 ${sample.flow_completed ? '完成' : '未完成'} · 质量门禁 ${sample.quality_passed === null ? '未评定' : sample.quality_passed ? '通过' : '未通过'} · 技术失败 ${sample.technical_failure ? '是' : '否'} · 降级 ${sample.degraded ? '是' : '否'}${failure}` : details;
     const timing = (sample.call_diagnostics || []).filter(d => d.error_code).map(d => {
       const ms = v => v == null ? '未观测到' : `${(v / 1000).toFixed(2)}s`;
       return `调用 ${d.call} ${d.error_code} · 阶段 ${d.phase || '未知'} · 收到响应头 ${ms(d.connected_ms)} · 首事件 ${ms(d.first_event_ms)} · 最后接收 ${ms(d.last_receive_ms)} · 用时 ${ms(d.elapsed_ms)}`;

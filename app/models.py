@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Union
 from typing_extensions import Literal
 
 from pydantic import BaseModel, Field, field_validator, computed_field
@@ -81,6 +81,11 @@ class EventContract(BaseModel):
     evidence_ids: List[str] = Field(default_factory=list)
 
 
+class RequirementAmbiguity(BaseModel):
+    id: str = Field(min_length=1, max_length=80)
+    question: str = Field(min_length=1, max_length=1500)
+
+
 class ClarificationItem(BaseModel):
     id: str = Field(min_length=1, max_length=80)
     kind: Literal["execution_detail", "out_of_scope", "behavior_blocker"]
@@ -89,6 +94,7 @@ class ClarificationItem(BaseModel):
     affected_scenarios: List[str] = Field(min_length=1, max_length=20)
     source_quote: str = Field(min_length=1, max_length=2000)
     reason: str = Field(min_length=1, max_length=1500)
+    ambiguity_ids: List[str] = Field(default_factory=list)
 
 
 class RequirementAnalysis(BaseModel):
@@ -97,7 +103,7 @@ class RequirementAnalysis(BaseModel):
     goals: List[str] = Field(default_factory=list)
     business_rules: List[str] = Field(default_factory=list)
     constraints: List[str] = Field(default_factory=list)
-    ambiguities: List[str] = Field(default_factory=list)
+    ambiguities: List[Union[str, RequirementAmbiguity]] = Field(default_factory=list)
     clarification_items: List[ClarificationItem] = Field(default_factory=list)
     atomic_requirements: List[AtomicRequirement] = Field(default_factory=list)
     risk_hints: List[str] = Field(default_factory=list)
