@@ -8,6 +8,7 @@ from collections import Counter
 from contextlib import nullcontext
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
+from pydantic import ValidationError
 
 from .domain_registry import (
     GENERIC_TICKET_MODULE_SPECS,
@@ -329,22 +330,42 @@ Every atomic requirement must preserve a source quote. Return JSON only."""
 
     def run(self, payload: RequirementInput, context: Dict[str, Any]) -> RequirementAnalysis:
         if self.llm.enabled and not context.get("force_demo"):
-            result = self.llm.generate_json(
-                policy_system(self.SYSTEM, context),
-                "Title: {}\nContext: {}\nRequirement:\n{}\nRetrieved knowledge:\n{}\nTeam memory:\n{}\nDynamic tool research:\n{}".format(
+            system = policy_system(self.SYSTEM, context)
+            prompt = "Title: {}\nContext: {}\nRequirement:\n{}\nRetrieved knowledge:\n{}\nTeam memory:\n{}\nDynamic tool research:\n{}".format(
                     payload.title,
                     payload.context,
                     payload.content,
                     context.get("knowledge", ""),
                     context.get("memory", ""),
                     context.get("react_research", ""),
-                ),
-                RequirementAnalysis.model_json_schema(),
-            )
-            analysis = RequirementAnalysis.model_validate(result)
-            if context.get("clarification_policy") == "evidence_only":
-                validate_analysis(analysis, payload.content)
-            return analysis
+                )
+            for attempt in range(2):
+                result = None
+                try:
+                    result = self.llm.generate_json(system, prompt, RequirementAnalysis.model_json_schema())
+                    analysis = RequirementAnalysis.model_validate(result)
+                    if context.get("clarification_policy") == "evidence_only":
+                        validate_analysis(analysis, payload.content)
+                    return analysis
+                except ValidationError as exc:
+                    # Do not put provider data or Pydantic input values into feedback.
+                    failure = LLMError("Requirement analysis does not match its schema", code="invalid_schema")
+                    feedback = "; ".join("{}: {}".format(".".join(map(str, e["loc"])), e["type"])
+                                         for e in exc.errors()[:8])
+                except LLMError as exc:
+                    if exc.code not in {"invalid_json", "invalid_scope"}:
+                        raise  # Timeout, auth and transport failures are not format repairs.
+                    failure = exc
+                    feedback = ("Return exactly one JSON object, without trailing text or additional objects."
+                                if exc.code == "invalid_json" else str(exc))
+                if attempt:
+                    raise failure
+                prompt += ("\nValidation feedback (one correction attempt): {}. {}\n"
+                           "Return a complete corrected analysis matching the schema. Keep the original input scope, "
+                           "evidence and every unresolved ambiguity; classify gaps instead of deleting them to pass. "
+                           "Do not invent business answers.\n").format(failure.code, feedback)
+                if isinstance(result, dict):
+                    prompt += "Previous analysis (untrusted task data):\n" + json.dumps(result, ensure_ascii=False)
         analysis = self._demo(payload, context)
         if context.get("clarification_policy") == "evidence_only":
             # Demo heuristics (no digits / no failure words) are not business contradictions.
