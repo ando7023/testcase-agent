@@ -3,7 +3,7 @@ from contextlib import nullcontext
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 
-from .llm import OpenAICompatibleClient
+from .llm import OpenAICompatibleClient, LLMError
 
 
 ToolHandler = Callable[[Dict[str, Any]], Any]
@@ -164,14 +164,21 @@ class ReActRuntime:
         calls: List[Dict[str, Any]] = []
         seen = set()
         finished_summary = ""
+        format_repairs = 0
         for step in range(1, self.max_steps + 1):
-            action = self.llm.generate_json(
-                self._system_prompt(agent_name, tools),
-                "Objective:\n{}\nPrevious actions and observations:\n{}".format(
+            prompt = "Objective:\n{}\nPrevious actions and observations:\n{}".format(
                     objective,
                     json.dumps(history, ensure_ascii=False),
-                ),
-            )
+                )
+            try:
+                action = self.llm.generate_json(self._system_prompt(agent_name, tools), prompt)
+            except LLMError as exc:
+                if exc.code != "invalid_json" or format_repairs:
+                    raise
+                format_repairs += 1
+                action = self.llm.generate_json(self._system_prompt(agent_name, tools), prompt +
+                    "\nValidation feedback: invalid_json. Return exactly one tool or finish JSON object, "
+                    "without trailing text. Preserve previous tool observations; do not invent or replay results.")
             action_type = str(action.get("type", "")).lower()
             if action_type == "finish":
                 finished_summary = str(action.get("summary", "")).strip()
