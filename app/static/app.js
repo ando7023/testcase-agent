@@ -382,6 +382,14 @@ $('#benchmark-toggle').addEventListener('click', () => {
 $('#benchmark-close').addEventListener('click', () => $('#benchmark-panel').classList.remove('open'));
 
 const benchmarkLabels = {
+  worker_execution: '执行 Agent',
+  supervisor_decision: '编排决策',
+  scope_validation: '证据范围校验',
+  schema_validation: '产物结构校验',
+  requirement_understanding: '需求理解',
+  module_planning: '模块规划',
+  case_generation: '用例生成',
+  quality_critic: '质量评审',
   flow_completion_rate: '流程完成率',
   quality_pass_rate: '质量门禁通过率（适用样本）',
   quality_assessed_count: '质量已评定样本数',
@@ -461,7 +469,7 @@ function renderBenchmarkReport(report) {
       .slice(0, 3)
       .map(([key, value]) => `${benchmarkLabels[key] || key} ${typeof value === 'boolean' ? (value ? '是' : '否') : (value <= 1 ? `${(value * 100).toFixed(0)}%` : value)}`)
       .join(' · ');
-    const failure = sample.technical_failure ? ` · 失败阶段 ${benchmarkLabels[sample.failure_stage] || sample.failure_stage || '未知'} · 错误 ${sample.failure_error_code || sample.error_code || '未知'}` : '';
+    const failure = sample.technical_failure ? ` · 失败阶段 ${benchmarkLabels[sample.failure_stage] || sample.failure_stage || '未知'}${sample.failure_agent ? ' / ' + (benchmarkLabels[sample.failure_agent] || sample.failure_agent) : ''}${sample.failure_phase ? ' / ' + (benchmarkLabels[sample.failure_phase] || sample.failure_phase) : ''} · 错误 ${sample.failure_error_code || sample.error_code || '未知'}` : '';
     const outcomes = report.schema_version === 2
       ? `流程 ${sample.flow_completed ? '完成' : '未完成'} · 质量门禁 ${sample.quality_passed === null ? '未评定' : sample.quality_passed ? '通过' : '未通过'} · 技术失败 ${sample.technical_failure ? '是' : '否'} · 降级 ${sample.degraded ? '是' : '否'}${failure}` : details;
     const timing = (sample.call_diagnostics || []).filter(d => d.error_code).map(d => {

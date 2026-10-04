@@ -6,6 +6,36 @@ from .review_policy import is_blocking
 from .clarification_policy import behavior_blockers, scope_summary
 
 
+def run_failure_details(run):
+    """Expose safe failure metadata even when Supervisor handled the exception."""
+    if not run or run.status != "failed":
+        return {}
+    step = next((step for step in reversed(run.steps) if step.status == "error"), None)
+    observation = step.observation if step else {}
+    messages = {
+        "invalid_scope": "需求证据校验未通过，请检查原文引文及本次样本证据 ID。",
+        "invalid_schema": "模型产物不符合结构约定，修正后仍未通过校验。",
+        "invalid_json": "模型响应不是有效 JSON，格式修正后仍未通过。",
+        "timeout": "模型请求超时，请查看接收阶段诊断。",
+        "output_limit": "模型输出达到长度限制，未返回完整产物。",
+        "context_limit": "输入内容或调用数量超过限制。",
+        "incomplete_response": "模型响应中断或未正常完成。",
+        "http_error": "模型服务返回 HTTP 错误，请检查服务配置和本地 Trace。",
+        "request_failed": "模型请求失败或响应不符合约定，请检查本地 Trace。",
+        "execution_failed": "执行异常，请检查本地 Trace。",
+    }
+    code = observation.get("error_code", "execution_failed")
+    code = code if code in messages else "execution_failed"
+    decision = step.decision if step else None
+    stage = "worker_execution" if decision else "supervisor_decision"
+    details = {"error_code": code, "failure_error_code": code, "error": messages[code],
+               "failure_stage": stage,
+               "failure_agent": (decision.capability or "worker") if decision else "supervisor"}
+    if code in {"invalid_scope", "invalid_schema"}:
+        details["failure_phase"] = "scope_validation" if code == "invalid_scope" else "schema_validation"
+    return details
+
+
 class BenchmarkExecution:
     def __init__(self, workspace, factory, mode, execution, human_policy, max_steps, llm_options=None, on_event=None, clarification_policy="strict"):
         self.workspace, self.factory = workspace, factory
@@ -134,7 +164,11 @@ class BenchmarkExecution:
         result["degraded"] = self.mode == "live" and bool(
             result["degraded"] or any(m in {"demo", "fallback"} for m in modes))
         if result["technical_failure"]:
-            result.update(status="technical_failed", quality_passed=None, **failure_context)
+            result.update(status="technical_failed", quality_passed=None)
+            for key, value in failure_context.items():
+                result.setdefault(key, value)
+            result.setdefault("failure_call", len(calls))
+            result.setdefault("failure_phase", worker.llm.last_call_diagnostics.get("phase", "execution"))
         elif result["degraded"]:
             result.update(status="degraded", quality_passed=None)
         elif result["flow_completed"]:
@@ -166,7 +200,10 @@ class BenchmarkExecution:
             if self._module_blocked(project):
                 result["execution_readiness"] = "blocked"
         self.emit({"event": "sample_end", "sample_id": sample_id, "status": result["status"],
-                   "question": result.get("question", ""), "technical_failure": result["technical_failure"]})
+                   "question": result.get("question", ""), "technical_failure": result["technical_failure"],
+                   "error": result.get("error", ""), "error_code": result.get("error_code", ""),
+                   "failure_stage": result.get("failure_stage", ""),
+                   "failure_agent": result.get("failure_agent", "")})
         return result
 
     def pipeline(self, worker, title, requirement, target="cases"):
@@ -225,6 +262,7 @@ class BenchmarkExecution:
         if incomplete:
             result["error_code"] = "review_incomplete"
         if run:
+            result.update(run_failure_details(run))
             result["actions"] = [{"index": s.index, "status": s.status,
                                   "capability": s.decision.capability or s.decision.action if s.decision else "planner_error"}
                                  for s in run.steps]

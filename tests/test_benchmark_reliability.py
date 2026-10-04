@@ -17,6 +17,9 @@ from app.observability import TraceManager
 from app.orchestrator import TestCaseOrchestrator
 from app.semantic_review import review_cases
 from app.store import JsonStore
+from app.supervisor_models import SupervisorDecision
+from app.public_benchmarks import PublicBenchmarkService
+from app.ebt_dataset import EBTRepository
 
 
 def case(i):
@@ -83,6 +86,50 @@ class BenchmarkReliabilityTest(unittest.TestCase):
         worker = TestCaseOrchestrator(JsonStore(self.root))
         self.assertTrue(worker.store.project_knowledge(""))
         self.assertIn("interfaces", worker._tool_get_domain_facts({"ticket_type": "EQUIPMENT_BORROW"}))
+
+    def test_successful_llm_with_invalid_scope_reports_validation_failure_and_backfills_history(self):
+        events = []
+        def factory(root):
+            worker = self.factory(root)
+            worker.llm.api_key, worker.llm.disabled = "test-placeholder", False
+            def response(*args, **kwargs):
+                worker.llm.last_call_diagnostics = {"phase": "complete"}
+                return {"summary": "Register", "atomic_requirements": [
+                    {"id": "R1", "statement": "Register", "source_quote": "private ungrounded source"}]}
+            worker.llm.generate_json = response
+            worker.requirement_agent.research.run = lambda *a, **k: {}
+            return worker
+        runner = BenchmarkExecution(self.root / "benchmark_runs" / "BR-fixture", factory,
+                                    "live", "agentic", "pause", 12, on_event=events.append,
+                                    clarification_policy="evidence_only")
+        decision = SupervisorDecision(action="invoke_agent", capability="requirement_understanding", reason="Analyze")
+        with patch("app.supervisor.AgenticSupervisor._choose", return_value=decision):
+            sample = runner.sample("103", lambda w: runner.pipeline(w, "Register", "A user shall register as a subscriber."))
+        self.assertEqual(sample["failure_error_code"], "invalid_scope")
+        self.assertEqual(sample["failure_stage"], "worker_execution")
+        self.assertEqual(sample["failure_agent"], "requirement_understanding")
+        self.assertEqual(sample["failure_phase"], "scope_validation")
+        self.assertEqual(sample["failure_call"], 2)
+        self.assertEqual(sample["llm_error_count"], 0)
+        self.assertFalse(sample["degraded"])
+        self.assertIsNone(sample["quality_passed"])
+        self.assertNotIn("private ungrounded source", sample["error"])
+        self.assertEqual(events[-1]["error_code"], "invalid_scope")
+
+        service = PublicBenchmarkService(self.root, EBTRepository(self.root / "external"))
+        old = {k: v for k, v in sample.items() if not k.startswith("failure_") and k not in {"error", "error_code"}}
+        report = {"workspace": "benchmark_runs/BR-fixture", "samples": [old], "metrics": {"technical_failure_rate": 1}}
+        path = service.report_root / "BR-fixture.json"
+        original = json.dumps(report).encode()
+        path.write_bytes(original)
+        restored = service.get_report("BR-fixture")
+        self.assertEqual(restored["samples"][0]["error_code"], "invalid_scope")
+        self.assertEqual(restored["samples"][0]["failure_agent"], "requirement_understanding")
+        self.assertEqual(path.read_bytes(), original)
+        self.assertEqual(restored["metrics"], report["metrics"])
+        report["workspace"] = "../outside"
+        path.write_text(json.dumps(report), encoding="utf-8")
+        self.assertNotIn("error_code", service.get_report("BR-fixture")["samples"][0])
 
     def test_benchmark_module_review_failure_is_not_swallowed(self):
         def fail(*args, **kwargs):

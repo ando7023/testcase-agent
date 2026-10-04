@@ -140,7 +140,7 @@
           break;
         case 'sample_end':
           this.message(`样本 ${event.sample_id} · ${statuses[event.status] || event.status}`,
-            event.question || '该样本执行已结束，详细结论将写入报告。', event.technical_failure ? 'error' : 'stage'); break;
+            event.error ? `${event.error}\n${event.error_code || ''} · ${agents[event.failure_agent] || event.failure_agent || event.failure_stage || ''}` : event.question || '该样本执行已结束，详细结论将写入报告。', event.technical_failure ? 'error' : 'stage'); break;
         case 'finished':
           this.terminal = true; this.report = event.report;
           this.status.textContent = '评测结束';

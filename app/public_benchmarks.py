@@ -14,7 +14,7 @@ from statistics import mean
 from typing import Any, Callable, Dict, Iterable, List, Optional
 
 from .ebt_dataset import EBTRepository
-from .benchmark_execution import BenchmarkExecution
+from .benchmark_execution import BenchmarkExecution, run_failure_details
 from .models import (
     AtomicRequirement,
     ModuleTree,
@@ -404,7 +404,28 @@ class PublicBenchmarkService:
         path = self.report_root / (report_id + ".json")
         if not path.is_file():
             raise ValueError("Benchmark report not found")
-        return json.loads(path.read_text(encoding="utf-8"))
+        report = json.loads(path.read_text(encoding="utf-8"))
+        # Old reports omitted Supervisor-caught errors. Read the saved run to
+        # fill display fields without rewriting historical results or metrics.
+        from .supervisor_models import SupervisorRun
+        root = (self.data_root / "benchmark_runs").resolve()
+        for sample in report.get("samples", []):
+            if not sample.get("technical_failure") or sample.get("failure_stage"):
+                continue
+            run_id = sample.get("run_id", "")
+            if not isinstance(run_id, str) or not re.fullmatch(r"AR-[a-f0-9]{32}", run_id):
+                continue
+            try:
+                run_path = (self.data_root / report["workspace"] / sample["workspace"] /
+                            "agent_runs" / (run_id + ".json")).resolve()
+                run_path.relative_to(root)  # Raises ValueError outside the benchmark root.
+                if not run_path.is_file():
+                    continue
+                run = SupervisorRun.model_validate(json.loads(run_path.read_text(encoding="utf-8")))
+                sample.update(run_failure_details(run))
+            except (KeyError, TypeError, ValueError, OSError):
+                continue  # Missing local evidence leaves old report fields untouched.
+        return report
 
     def run(
         self,

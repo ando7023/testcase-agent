@@ -15,4 +15,28 @@ assert.equal(preview('{"summary":"中文\\u4e'), '摘要：中文');
 assert.equal(preview('{"question":"<script>alert(1)</script>"}'), '待确认：<script>alert(1)</script>');
 assert.equal(preview('{"score":92}'), '{"score":92}');
 assert.throws(() => new SSEDecoder(() => {}).feed('data: broken\n\n'), SyntaxError);
+
+// Render the actual report function: handled validation errors must remain visible.
+const fs = require('node:fs');
+const vm = require('node:vm');
+const source = fs.readFileSync(require.resolve('../app/static/app.js'), 'utf8');
+const labels = source.slice(source.indexOf('const benchmarkLabels ='), source.indexOf('function benchmarkCount('));
+const renderer = source.slice(source.indexOf('function benchmarkMetricValue('), source.indexOf('function renderBenchmarkReports('));
+const resultNode = {};
+const sandbox = {
+  $: () => resultNode,
+  escapeHtml: value => String(value).replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;'),
+};
+vm.createContext(sandbox);
+vm.runInContext(labels + renderer, sandbox);
+sandbox.renderBenchmarkReport({schema_version: 2, dataset_id: 'EBT-RAG-V1', mode: 'live',
+  samples: [{id: '103', technical_failure: true, quality_passed: null, status: 'technical_failed',
+    failure_stage: 'worker_execution', failure_agent: 'requirement_understanding',
+    failure_phase: 'scope_validation', failure_error_code: 'invalid_scope',
+    error: '<script>private</script>'}]});
+assert.match(resultNode.innerHTML, /需求理解/);
+assert.match(resultNode.innerHTML, /证据范围校验/);
+assert.match(resultNode.innerHTML, /invalid_scope/);
+assert.match(resultNode.innerHTML, /&lt;script&gt;/);
+assert.doesNotMatch(resultNode.innerHTML, /<script>/);
 console.log('Benchmark SSE framing, UTF-8 fragmentation and preview checks passed.');
