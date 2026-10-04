@@ -32,9 +32,9 @@ CAPABILITIES = {item.name: item for item in (
     Capability("inspect_materials", "tool", "Read uploaded document excerpts, extraction warnings and material types.", "Any state", "Material evidence"),
     Capability("search_knowledge", "tool", "Retrieve business knowledge for instruction as query.", "Nonempty instruction", "Knowledge evidence"),
     Capability("requirement_understanding", "agent", "Analyze requirements and risks, using existing RAG and memory.", "No analysis or downstream artifacts", "Requirement analysis"),
-    Capability("module_planning", "agent", "Build initial modules with internal module quality check.", "Analysis exists; no modules or cases", "Unconfirmed module tree"),
-    Capability("case_generation", "agent", "Generate cases using selected skills; continue adds cases, chat edits, targeted replaces a subtree.", "Confirmed nonempty tree; existing cases forbid full mode", "Cases; previous review invalidated"),
-    Capability("quality_critic", "agent", "Independently assess current cases and return findings.", "Confirmed tree and cases", "Review findings"),
+    Capability("module_planning", "agent", "Build initial modules with internal module quality check.", "Analysis exists; no modules or cases", "Planned module tree"),
+    Capability("case_generation", "agent", "Generate cases using selected skills; continue adds cases, chat edits, targeted replaces a subtree.", "Nonempty planned tree; existing cases forbid full mode", "Cases; previous review invalidated"),
+    Capability("quality_critic", "agent", "Independently assess current cases and return findings.", "Nonempty tree and cases", "Review findings"),
     Capability("case_revision", "agent", "Repair current fixable findings once using selected skills and instruction.", "Fresh review in this run with fixable findings", "Repaired cases; requires a new review"),
 )}
 
@@ -54,8 +54,10 @@ not invented contracts. High/critical/error findings and incomplete reviews alwa
 Consult issue_ledger and previous_reviews; do not reopen old recommendations without new evidence.
 At most two repair attempts are allowed per user clarification, then review and ask for concrete
 facts or human adjudication if still blocked. Do not repeatedly ask for more budget to polish suggestions.
-Only a human can confirm modules: request_input when the module tree is unconfirmed. Never
-claim it is confirmed based on a user response. Observe available capabilities and runtime guards.
+Module confirmation is optional. A nonempty planned tree permits generation without human approval.
+Never request input merely to confirm modules or claim automatic progress is human acceptance.
+For target=modules, finish after module planning and review; do not generate cases.
+Observe available capabilities and runtime guards.
 Never repeat a successful identical action on unchanged state. Respect remaining_steps.
 request_input itself consumes one step. It cannot grant more steps or waive blocking findings.
 If the remaining budget cannot cover repair, review and finish, ask for an explicit budget extension;
@@ -95,7 +97,7 @@ class AgenticSupervisor:
         self.store = orchestrator.store
         self.planner = planner if planner is not None else orchestrator.llm
 
-    def start(self, project_id, goal="生成满足需求的测试用例，并根据评审反馈修复", max_steps=12):
+    def start(self, project_id, goal="生成满足需求的测试用例，并根据评审反馈修复", max_steps=12, target="cases"):
         if type(max_steps) is not int or not 1 <= max_steps <= 20:
             raise ValueError("Initial budget must be 1–20 steps")
         with self.store.project_lease(project_id):
@@ -103,6 +105,7 @@ class AgenticSupervisor:
             run = SupervisorRun(id="AR-" + uuid.uuid4().hex, project_id=project_id,
                                 clarification_policy=project.clarification_policy,
                                 goal=goal, max_steps=max_steps,
+                                target=target,
                                 mode="model" if self.planner.enabled else "deterministic")
             self.store.save_agent_run(run)
             return self._drive(run)
@@ -121,8 +124,6 @@ class AgenticSupervisor:
             project = self._project(project_id)
             if project.clarification_policy != run.clarification_policy:
                 raise ValueError("Clarification policy changed; start a new evaluation run")
-            if run.status == "waiting_confirmation" and not self._confirmed(project):
-                raise ValueError("Confirm the module tree in the module workspace before continuing")
             if run.status == "waiting_input" and not answer.strip():
                 raise ValueError("Please answer the Supervisor question")
             if run.mode == "model" and not self.planner.enabled:
@@ -150,8 +151,9 @@ class AgenticSupervisor:
         return project
 
     @staticmethod
-    def _confirmed(project):
-        return bool(project.module_tree and project.module_tree.confirmed and project.module_tree.modules)
+    def _modules_ready(project):
+        # Historical confirmed is human provenance, no longer an execution gate.
+        return bool(project.module_tree and project.module_tree.modules)
 
     @staticmethod
     def _blocking(project):
@@ -160,9 +162,9 @@ class AgenticSupervisor:
         findings += [ReviewFinding(severity="medium", category="clarification", disposition="clarification",
                                   message=g.question, requirement_ids=g.requirement_ids,
                                   clarification_kind="behavior_blocker") for g in behavior_blockers(project)]
-        if project.clarification_policy == "evidence_only" and project.module_review:
+        if project.module_review:
             findings += [ReviewFinding(severity=f.severity, category="module_scope", message=f.message)
-                         for f in project.module_review.findings if f.severity in {"high", "critical", "error"}]
+                         for f in project.module_review.findings if f.severity in {"high", "critical", "error"} or f.category == "review_incomplete"]
         return findings
 
     def _snapshot(self, project):
@@ -175,6 +177,7 @@ class AgenticSupervisor:
                            "chunks": len(d.chunks), "warnings": d.warnings[:10]} for d in project.source_documents],
             "analysis": analysis.model_dump_json()[:18000] if analysis else None,
             "modules": project.module_tree.model_dump() if project.module_tree else None,
+            "module_review": project.module_review.model_dump() if project.module_review else None,
             "case_count": len(project.cases),
             "case_sample": [case.model_dump() for case in project.cases[:4]],
             "review": project.review.model_dump() if project.review else None,
@@ -184,7 +187,7 @@ class AgenticSupervisor:
         if run.mode == "deterministic":
             return self._offline(project, run)
         context = {
-            "goal": run.goal, "responses": run.responses,
+            "goal": run.goal, "target": run.target, "responses": run.responses,
             "issue_ledger": run.issue_ledger, "previous_reviews": run.review_history,
             "repair_rounds": run.repair_rounds, "max_repair_rounds": 2,
             "state": self._snapshot(project), "remaining_steps": run.max_steps - len(run.steps),
@@ -207,8 +210,14 @@ class AgenticSupervisor:
                                       question="\n".join(g.question for g in behavior_blockers(project))[:2000])
         elif not project.module_tree:
             name = "module_planning"
-        elif not self._confirmed(project):
-            return SupervisorDecision(action="request_input", reason="模块需要人工确认", question="请在模块工作区确认模块树，然后继续。")
+        elif not self._modules_ready(project):
+            return SupervisorDecision(action="request_input", reason="模块为空", question="请补充可测试的需求范围，当前没有可用模块。")
+        elif not project.cases and self._blocking(project):
+            return SupervisorDecision(action="request_input", reason="模块存在阻塞问题", question="请补充模块评审所缺少的业务依据。")
+        elif run.target == "modules":
+            if self._blocking(project):
+                return SupervisorDecision(action="request_input", reason="模块存在阻塞问题", question="请补充模块评审所缺少的业务依据。")
+            return SupervisorDecision(action="finish", reason="模块规划与评审已完成")
         elif not project.cases:
             name = "case_generation"
         elif not project.review or run.review_fingerprint != artifact_fingerprint(project):
@@ -236,12 +245,10 @@ class AgenticSupervisor:
                     decision.question = decision.question[:2000]
                 elif self._blocking(project):
                     pass  # Real review blockers and technical failures retain their existing gates.
-                elif project.module_tree and not self._confirmed(project):
-                    decision.question = "请确认模块树。执行细节缺口另列于报告，本次确认不代表回答业务问题或人工验收用例。"
                 elif project.analysis and not project.analysis.atomic_requirements:
                     decision.question = "当前材料尚未提取出可测试的明确行为，请补充核心需求。"
                 else:
-                    required = (6 if not project.analysis else 5 if not project.module_tree else
+                    required = (5 if not project.analysis else 4 if not project.module_tree else
                                 3 if not project.cases else 2 if not project.review or run.review_fingerprint != artifact_fingerprint(project) else 1)
                     remaining = run.max_steps - len(run.steps)
                     if remaining < required:
@@ -249,8 +256,14 @@ class AgenticSupervisor:
                     else:
                         raise ValueError("Behavior-level policy: missing implementation details or out-of-scope ideas do not justify pausing; continue supported work")
             if decision.action == "finish":
-                if not self._confirmed(project) or not project.cases or not project.review:
-                    raise ValueError("Completion requires confirmed modules, cases and a review")
+                if run.target == "modules":
+                    if not project.analysis or not self._modules_ready(project) or not project.module_review:
+                        raise ValueError("Module completion requires analysis, nonempty modules and module review")
+                    if self._blocking(project) or any(f.severity in {"high", "critical", "error"} or f.category == "review_incomplete" for f in project.module_review.findings):
+                        raise ValueError("Blocking module findings remain")
+                    return
+                if not self._modules_ready(project) or not project.cases or not project.review:
+                    raise ValueError("Completion requires nonempty modules, cases and a review")
                 if run.review_fingerprint != artifact_fingerprint(project):
                     raise ValueError("Run quality_critic on the current artifacts before finishing")
                 if self._blocking(project):
@@ -260,6 +273,8 @@ class AgenticSupervisor:
         if not capability or decision.action != "invoke_" + capability.kind:
             raise ValueError("Unknown capability or action-kind mismatch")
         name = capability.name
+        if run.target == "modules" and name in {"case_generation", "case_revision", "quality_critic"}:
+            raise ValueError("Module-only target does not permit case operations")
         if decision.skills and name not in {"case_generation", "case_revision"}:
             raise ValueError("Testing skills apply only to case_generation/case_revision")
         if name == "requirement_understanding" and (project.analysis or project.module_tree or project.cases):
@@ -267,8 +282,8 @@ class AgenticSupervisor:
         if name == "module_planning" and (not project.analysis or project.module_tree or project.cases):
             raise ValueError("Initial module planning requires analysis and no downstream artifacts")
         if name in {"case_generation", "case_revision", "quality_critic"}:
-            if not project.analysis or not self._confirmed(project):
-                raise ValueError("Human module confirmation is required; use request_input")
+            if not project.analysis or not self._modules_ready(project):
+                raise ValueError("Analysis and a nonempty module tree are required")
         if name in {"case_generation", "case_revision"} and not decision.skills:
             raise ValueError("Select at least one testing skill explicitly")
         if name in {"case_generation", "case_revision"} and project.cases and run.repair_rounds >= 2:
@@ -345,7 +360,7 @@ class AgenticSupervisor:
                 run.steps.append(step)
                 self.store.save_agent_run(run)
                 if decision.action == "request_input":
-                    run.status = "waiting_confirmation" if project.module_tree and not self._confirmed(project) else "waiting_input"
+                    run.status = "waiting_input"
                     if project.clarification_policy == "evidence_only" and self._blocking(project):
                         run.status = "waiting_input"
                     run.question = decision.question

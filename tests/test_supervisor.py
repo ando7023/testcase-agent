@@ -178,16 +178,16 @@ class SupervisorTest(unittest.TestCase):
         self.assertEqual(self.store.get_agent_run(self.project.id, run.id).responses, [])
 
     def test_offline_pause_and_resume_after_reloading_run(self):
-        run = AgenticSupervisor(self.worker).start(self.project.id)
+        run = AgenticSupervisor(self.worker).start(self.project.id, max_steps=2)
         self.assertEqual(run.mode, "deterministic")
-        self.assertEqual(run.status, "waiting_confirmation")
+        self.assertEqual(run.status, "budget_exhausted")
         self.assertFalse(self.store.get_project(self.project.id).cases)
-        with self.assertRaisesRegex(ValueError, "Confirm"):
-            AgenticSupervisor(self.worker).resume(self.project.id, run.id, "已经同意")
-        project = self.store.get_project(self.project.id)
-        self.worker.confirm_modules(project, [m.model_dump() for m in project.module_tree.modules])
-        result = AgenticSupervisor(self.worker).resume(self.project.id, run.id)
+        # Old confirmation pauses remain resumable without changing human provenance.
+        run.status = "waiting_confirmation"
+        self.store.save_agent_run(run)
+        result = AgenticSupervisor(self.worker).resume(self.project.id, run.id, additional_steps=6)
         self.assertEqual(result.status, "completed")
+        self.assertFalse(self.store.get_project(self.project.id).module_tree.confirmed)
         self.assertEqual(self.store.get_agent_run(self.project.id, run.id).status, "completed")
         self.assertLessEqual(len(result.steps), result.max_steps)
 
@@ -261,12 +261,36 @@ class SupervisorTest(unittest.TestCase):
         self.assertIsNone(run.steps[0].decision)
         self.assertIsNone(self.store.get_project(self.project.id).analysis)
 
-    def test_human_gate_cannot_be_bypassed(self):
+    def test_generation_does_not_require_human_confirmation(self):
         self.prepared(confirmed=False)
         run, _ = self.run_script([invoke("case_generation", skills=["happy_path"]), ask()])
-        self.assertEqual(run.steps[0].status, "rejected")
-        self.assertEqual(run.status, "waiting_confirmation")
-        self.assertFalse(self.store.get_project(self.project.id).cases)
+        self.assertEqual(run.steps[0].status, "success")
+        self.assertEqual(run.status, "waiting_input")
+        self.assertTrue(self.store.get_project(self.project.id).cases)
+        self.assertFalse(self.store.get_project(self.project.id).module_tree.confirmed)
+
+    def test_module_only_target_finishes_without_cases_or_confirmation(self):
+        run = AgenticSupervisor(self.worker).start(self.project.id, target="modules")
+        self.assertEqual(run.status, "completed")
+        self.assertEqual(self.store.get_agent_run(self.project.id, run.id).target, "modules")
+        project = self.store.get_project(self.project.id)
+        self.assertFalse(project.module_tree.confirmed)
+        self.assertFalse(project.cases)
+        from app.supervisor_models import SupervisorDecision
+        with self.assertRaisesRegex(ValueError, "Module-only"):
+            AgenticSupervisor(self.worker)._validate(SupervisorDecision.model_validate(
+                invoke("case_generation", skills=["happy_path"])), project, run)
+
+    def test_module_blocker_still_prevents_autonomous_completion(self):
+        project = self.prepared(confirmed=False)
+        project.module_review.findings = [ReviewFinding(severity="high", category="coverage", message="Missing core requirement")]
+        self.store.save_project(project)
+        run = AgenticSupervisor(self.worker).start(project.id, target="modules")
+        self.assertEqual(run.status, "waiting_input")
+        self.assertFalse(self.store.get_project(project.id).cases)
+        from app.supervisor_models import SupervisorDecision
+        with self.assertRaisesRegex(ValueError, "Blocking module"):
+            AgenticSupervisor(self.worker)._validate(SupervisorDecision.model_validate(finish()), project, run)
 
     def test_existing_artifacts_and_unknown_skills_are_protected(self):
         p = self.prepared(cases=True)
@@ -368,7 +392,7 @@ class SupervisorTest(unittest.TestCase):
             response = client.post(base + "/agent-runs", json={})
             self.assertEqual(response.status_code, 200)
             run = response.json()
-            self.assertEqual(run["status"], "waiting_confirmation")
+            self.assertEqual(run["status"], "completed")
             resume = base + "/agent-runs/" + run["id"] + "/continue"
             self.assertEqual(client.post(resume, json={"answer": "yes"}).status_code, 409)
             with self.store.project_lease(self.project.id):
@@ -377,9 +401,6 @@ class SupervisorTest(unittest.TestCase):
                 self.assertEqual(client.get(base + "/agent-runs").status_code, 200)
             p = self.store.get_project(self.project.id)
             self.assertEqual(client.put(base + "/modules/confirm", json={"modules": [m.model_dump() for m in p.module_tree.modules]}).status_code, 200)
-            done = client.post(resume, json={})
-            self.assertEqual(done.status_code, 200)
-            self.assertEqual(done.json()["status"], "completed")
             self.assertEqual(client.post(resume, json={}).status_code, 409)
             self.assertTrue(client.get(base + "/agent-runs/" + run["id"]).json()["steps"])
             other = self.store.create_project("Other", REQUIREMENT)
@@ -392,13 +413,10 @@ class SupervisorTest(unittest.TestCase):
             client = TestClient(api.app)
             base = "/api/projects/" + self.project.id
             run = client.post(base + "/agent-runs", json={"max_steps": 3}).json()
-            self.assertEqual(run["status"], "waiting_confirmation")
+            self.assertEqual(run["status"], "budget_exhausted")
             path = base + "/agent-runs/" + run["id"] + "/continue"
             for amount in [-1, 21, True, 1.5]:
                 self.assertEqual(client.post(path, json={"additional_steps": amount}).status_code, 422)
-            self.assertEqual(client.post(path, json={"additional_steps": 8}).status_code, 409)
-            p = self.store.get_project(self.project.id)
-            self.worker.confirm_modules(p, [m.model_dump() for m in p.module_tree.modules])
             self.assertEqual(client.post(path, json={}).status_code, 409)
             result = client.post(path, json={"additional_steps": 8})
             self.assertEqual(result.status_code, 200)

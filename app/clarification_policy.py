@@ -23,8 +23,8 @@ Each ambiguities entry must have a corresponding clarification_items question. N
 For case critique clarifications: return clarification_kind and clarification_reason, exact evidence and affected
 requirement_ids. An invented acceptance assertion is a defect, NOT an execution_detail clarification.
 High/critical/error findings and review_incomplete still block. No hidden answers or simulated business facts.
-Module confirmation is separate: ask only for module confirmation when the only gaps are execution details or
-out-of-scope ideas. Business input requires a concrete behavior blocker. Do not pause solely to expand scope.
+Module confirmation is optional; proceed with a nonempty planned tree without claiming human acceptance.
+Business input requires a concrete behavior blocker. Do not pause solely to confirm modules or expand scope.
 """
 
 

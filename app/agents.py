@@ -620,7 +620,7 @@ target subtree. Keep stable IDs for unchanged modules.""".format(
                 risks=analysis.risk_hints[:2],
                 case_types=["functional", "exception"],
             ))
-            tree.coverage_notes.append("本地回退继续生成已追加一个待人工确认模块。")
+            tree.coverage_notes.append("本地回退继续生成已追加一个模块，供后续生成使用。")
             return tree
         target = self._find(tree.modules, target_module_id) if target_module_id else None
         if target:
@@ -648,7 +648,7 @@ target subtree. Keep stable IDs for unchanged modules.""".format(
         if facts and facts.module_specs:
             specs = facts.module_specs
             notes = [
-                "模块树来自结构化接口、状态、事件和权限事实，需由 QA 确认。",
+                "模块树来自结构化接口、状态、事件和权限事实，可直接用于生成，支持人工调整。",
                 "RAG 规则必须保留证据 ID 和 PDF 页码；歧义项不作为已确认规则。",
             ]
             allow_fallback = True
@@ -667,7 +667,7 @@ target subtree. Keep stable IDs for unchanged modules.""".format(
                 ModuleSpec(name="权限与安全", keywords=["权限", "角色", "管理员", "授权", "登录"], objective="验证不同身份的数据与操作隔离"),
                 ModuleSpec(name="异常与恢复", keywords=["失败", "异常", "超时", "重试", "网络", "重复"], objective="验证依赖异常时的反馈和数据一致性"),
             ]
-            notes = ["模块树需由 QA 确认后再生成用例。"]
+            notes = ["模块树规划后可直接生成用例，支持人工调整。"]
             allow_fallback = False
 
         risky_types = {"state_transition", "event_consistency", "exception"}
@@ -909,8 +909,8 @@ references such as "the previous case" or "that module". Return a JSON object wi
             TestCase.model_validate(item)
             for item in payload.get("existing_cases", [])
         ]
-        if not tree.confirmed:
-            raise ValueError("Module tree must be confirmed before case generation")
+        if not tree.modules:
+            raise ValueError("A nonempty module tree is required before case generation")
         if mode not in {"full", "regenerate", "continue", "targeted", "chat"}:
             raise ValueError("Unsupported case generation mode: {}".format(mode))
         if mode in {"continue", "targeted", "chat"} and not existing:

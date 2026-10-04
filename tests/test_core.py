@@ -175,10 +175,15 @@ class PipelineTest(unittest.TestCase):
         for child in node.children:
             yield from PipelineTest._mindmap_nodes(child)
 
-    def test_case_generation_requires_human_confirmation(self):
+    def test_case_generation_accepts_unconfirmed_nonempty_tree(self):
         project = self.orchestrator.store.create_project("门禁测试", REQUIREMENT)
         project = self.orchestrator.plan_modules(self.orchestrator.analyze(project))
-        with self.assertRaisesRegex(PipelineError, "Confirm"):
+        self.assertFalse(project.module_tree.confirmed)
+        project = self.orchestrator.generate_cases(project)
+        self.assertTrue(project.cases)
+        self.assertFalse(project.module_tree.confirmed)
+        project.module_tree.modules = []
+        with self.assertRaisesRegex(PipelineError, "nonempty"):
             self.orchestrator.generate_cases(project)
 
     def test_knowledge_and_memory_are_available(self):

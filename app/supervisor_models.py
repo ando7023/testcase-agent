@@ -35,6 +35,7 @@ class SupervisorRun(BaseModel):
     project_id: str
     clarification_policy: Literal["strict", "evidence_only"] = "strict"
     goal: str = Field(min_length=1, max_length=4000)
+    target: Literal["cases", "modules"] = "cases"
     mode: Literal["model", "deterministic"]
     status: Literal["running", "waiting_input", "waiting_confirmation", "completed", "budget_exhausted", "failed", "needs_attention"] = "running"
     max_steps: int = Field(default=12, ge=1, le=100)

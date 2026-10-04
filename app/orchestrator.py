@@ -831,8 +831,8 @@ class TestCaseOrchestrator:
     ) -> ProjectState:
         if selected_skills is not None:
             resolve_skills("", selected_skills)
-        if not project.analysis or not project.module_tree or not project.module_tree.confirmed:
-            raise PipelineError("Confirm the module tree before generating cases")
+        if not project.analysis or not project.module_tree or not project.module_tree.modules:
+            raise PipelineError("Analysis and a nonempty module tree are required before generating cases")
         allowed = {"full", "regenerate", "continue", "targeted", "chat"}
         if mode not in allowed:
             raise PipelineError("Unsupported case mode: {}".format(mode))
@@ -847,7 +847,7 @@ class TestCaseOrchestrator:
 
         has_explicit_instruction = bool(instruction.strip())
         instruction = instruction.strip() or {
-            "full": "根据已确认模块生成完整测试用例集",
+            "full": "根据当前模块生成完整测试用例集",
             "regenerate": "清空已有用例并重新生成完整测试用例集",
             "continue": "保留已有用例并补充遗漏场景",
             "targeted": "重新生成指定模块及其子模块的测试用例",
@@ -884,7 +884,7 @@ class TestCaseOrchestrator:
             generation_tree = ModuleTree(
                 modules=[module_by_id[target_module_id].model_copy(deep=True)],
                 coverage_notes=project.module_tree.coverage_notes,
-                confirmed=True,
+                confirmed=project.module_tree.confirmed,
             )
         payload = {
             "analysis": project.analysis.model_dump(),
@@ -1122,8 +1122,8 @@ class TestCaseOrchestrator:
 
     def revise_once(self, project: ProjectState, selected_skills=None, supervisor_evidence="", instruction="") -> ProjectState:
         """Repair once. The Supervisor independently decides whether to review next."""
-        if not project.analysis or not project.module_tree or not project.module_tree.confirmed or not project.cases or not project.review:
-            raise PipelineError("A confirmed tree, cases and current review are required")
+        if not project.analysis or not project.module_tree or not project.module_tree.modules or not project.cases or not project.review:
+            raise PipelineError("A nonempty tree, cases and current review are required")
         context = self._context(project.requirement, project_id=project.id, agent_id="case_generation")
         self._supervisor_context(context, selected_skills, supervisor_evidence)
         context["knowledge"] += "\nRepair instruction:\n" + instruction

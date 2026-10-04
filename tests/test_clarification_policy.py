@@ -130,9 +130,8 @@ class ClarificationPolicyTests(unittest.TestCase):
     def test_confirmation_cannot_smuggle_business_answers(self):
         _, project, run, controller = self.prepared([gap()], confirmed=False)
         decision = SupervisorDecision(action="request_input", reason="Confirm", question="Confirm and provide age/payment/GDPR rules")
-        controller._validate(decision, project, run)
-        self.assertNotIn("GDPR", decision.question)
-        self.assertIn("不代表回答业务问题", decision.question)
+        with self.assertRaisesRegex(ValueError, "do not justify pausing"):
+            controller._validate(decision, project, run)
 
     def test_actual_behavior_blocker_prevents_finish_even_with_perfect_review(self):
         item = gap("behavior_blocker")
@@ -170,8 +169,9 @@ class ClarificationPolicyTests(unittest.TestCase):
                         name = "requirement_understanding"
                     elif snapshot["modules"] is None:
                         name = "module_planning"
-                    elif not snapshot["modules"]["confirmed"]:
-                        return {"action": "request_input", "reason": "Confirm modules", "question": "Confirm?"}
+                    elif snapshot["blocking_clarifications"] or (snapshot["module_review"] and any(
+                            f["severity"] == "high" for f in snapshot["module_review"]["findings"])):
+                        return {"action": "request_input", "reason": "Behavior conflict", "question": "Clarify conflicting outcomes"}
                     elif not snapshot["case_count"]:
                         name = "case_generation"
                     elif snapshot["review"] is None:

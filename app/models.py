@@ -144,7 +144,7 @@ class TestModule(BaseModel):
 class ModuleTree(BaseModel):
     modules: List[TestModule]
     coverage_notes: List[str] = Field(default_factory=list)
-    confirmed: bool = False
+    confirmed: bool = False  # Optional human provenance; not a generation prerequisite.
 
 
 class ConversationDecision(BaseModel):
