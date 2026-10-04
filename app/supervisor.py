@@ -423,6 +423,10 @@ class AgenticSupervisor:
                 label = "Supervisor decision call" if stage == "supervisor_decision" else "Worker call"
                 run.error = label + " failed: " + str(exc)[:1000]
                 step.observation = {"error": run.error, "failure_stage": stage, "error_code": exc.code}
+                from .clarification_policy import validation_diagnostics
+                diagnostics = validation_diagnostics(getattr(exc, "validation_issues", None))
+                if diagnostics:
+                    step.observation["validation_issues"] = diagnostics
             except Exception as exc:
                 step.status, run.status = "error", "failed"
                 run.error = "Execution failed: " + str(exc)[:1000]

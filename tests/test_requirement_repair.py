@@ -5,7 +5,7 @@ from unittest.mock import Mock
 from app.agents import RequirementUnderstandingAgent
 from app.llm import LLMError
 from app.models import RequirementInput, RequirementAnalysis
-from app.clarification_policy import ambiguity_records, validate_analysis
+from app.clarification_policy import ambiguity_records, validate_analysis, validation_diagnostics
 
 RAW = "An unregistered user cannot establish a trace."
 
@@ -74,7 +74,7 @@ class RequirementRepairTests(unittest.TestCase):
             validate_analysis(bad, RAW)
         bad = model.model_copy(deep=True)
         bad.ambiguities.append(bad.ambiguities[0])
-        with self.assertRaisesRegex(LLMError, "unique"):
+        with self.assertRaisesRegex(LLMError, "invalid_ambiguity_id"):
             validate_analysis(bad, RAW)
 
     def test_legacy_analysis_keeps_exact_match_compatibility_without_fuzzy_downgrade(self):
@@ -149,6 +149,46 @@ class RequirementRepairTests(unittest.TestCase):
         result.clarification_items[0].evidence_ids = []
         with self.assertRaises(LLMError):
             validate_analysis(result, RAW, evidence)
+
+    def test_document_id_confusion_and_missing_quote_citation_are_both_reported(self):
+        quote = "A valid subscriber manager exists."
+        evidence = {"EBT-SAMPLE-REQ-103": {"content": RAW}, "EBT-SAMPLE-TEST-143": {"content": quote}}
+        bad = valid()
+        bad["ambiguities"] = [{"id": "A1", "question": "Which API?"}]
+        bad["clarification_items"] = [{"id": "G1", "kind": "execution_detail", "question": "Which API?",
+            "requirement_ids": ["EBT-SAMPLE-REQ-103"], "source_quote": quote, "reason": "Invocation detail",
+            "affected_scenarios": ["Registration"], "ambiguity_ids": []}]
+        model = RequirementAnalysis.model_validate(bad)
+        with self.assertRaises(LLMError) as caught:
+            validate_analysis(model, RAW, evidence)
+        self.assertEqual(caught.exception.validation_issues, [
+            {"field": "clarification_items[0].requirement_ids", "code": "unknown_requirement_id"},
+            {"field": "clarification_items[0].source_quote", "code": "ungrounded_quote"},
+            {"field": "ambiguities[0]", "code": "unclassified_ambiguity"}])
+        fixed = RequirementAnalysis.model_validate(bad)
+        fixed.clarification_items[0].requirement_ids = ["R1"]
+        fixed.clarification_items[0].evidence_ids = ["EBT-SAMPLE-TEST-143"]
+        fixed.clarification_items[0].ambiguity_ids = ["A1"]
+        agent, generate, context = self.execute([bad, fixed.model_dump()])
+        context["input_evidence"] = evidence
+        result = agent.run(RequirementInput(title="Registration", content=RAW), context)
+        self.assertEqual(generate.call_count, 2)
+        prompt = generate.call_args[0][1]
+        self.assertIn("clarification_items[0].requirement_ids", prompt)
+        self.assertIn('"allowed_requirement_ids": ["R1"]', prompt)
+        self.assertIn('"matching_evidence_ids": ["EBT-SAMPLE-TEST-143"]', prompt)
+        self.assertEqual(result.clarification_items[0].ambiguity_ids, ["A1"])
+
+    def test_atomic_id_cannot_reuse_source_id_and_diagnostics_do_not_leak_values(self):
+        bad = valid()
+        bad["atomic_requirements"][0]["id"] = "EBT-SAMPLE-REQ-103"
+        evidence = {"EBT-SAMPLE-REQ-103": {"content": RAW}}
+        with self.assertRaises(LLMError) as caught:
+            validate_analysis(RequirementAnalysis.model_validate(bad), RAW, evidence)
+        self.assertEqual(caught.exception.validation_issues[0]["code"], "source_id_as_requirement")
+        self.assertNotIn("EBT-SAMPLE-REQ-103", str(caught.exception))
+        self.assertEqual(validation_diagnostics([None, {"field": "private-value", "code": "ungrounded_quote"},
+            {"field": "atomic_requirements", "code": []}, {"field": "atomic_requirements", "code": "private-value"}]), [])
 
 
 if __name__ == "__main__":

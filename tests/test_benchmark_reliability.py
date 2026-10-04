@@ -114,10 +114,12 @@ class BenchmarkReliabilityTest(unittest.TestCase):
         self.assertFalse(sample["degraded"])
         self.assertIsNone(sample["quality_passed"])
         self.assertNotIn("private ungrounded source", sample["error"])
+        self.assertEqual(sample["validation_issues"], [{"field": "atomic_requirements[0].source_quote", "code": "ungrounded_quote"}])
+        self.assertIn("atomic_requirements[0].source_quote", sample["error"])
         self.assertEqual(events[-1]["error_code"], "invalid_scope")
 
         service = PublicBenchmarkService(self.root, EBTRepository(self.root / "external"))
-        old = {k: v for k, v in sample.items() if not k.startswith("failure_") and k not in {"error", "error_code"}}
+        old = {k: v for k, v in sample.items() if not k.startswith("failure_") and k not in {"error", "error_code", "validation_issues"}}
         report = {"workspace": "benchmark_runs/BR-fixture", "samples": [old], "metrics": {"technical_failure_rate": 1}}
         path = service.report_root / "BR-fixture.json"
         original = json.dumps(report).encode()
@@ -125,6 +127,7 @@ class BenchmarkReliabilityTest(unittest.TestCase):
         restored = service.get_report("BR-fixture")
         self.assertEqual(restored["samples"][0]["error_code"], "invalid_scope")
         self.assertEqual(restored["samples"][0]["failure_agent"], "requirement_understanding")
+        self.assertEqual(restored["samples"][0]["validation_issues"], sample["validation_issues"])
         self.assertEqual(path.read_bytes(), original)
         self.assertEqual(restored["metrics"], report["metrics"])
         report["workspace"] = "../outside"

@@ -326,7 +326,10 @@ class RequirementUnderstandingAgent(Agent):
 Identify actors, goals, explicit business rules, constraints, ambiguity, atomic testable requirements, and risks.
 Extract API contracts, ticket states, events, correlation keys, and permissions when present.
 Retrieved knowledge must be cited by evidence ID and must not be presented as an explicit PRD fact without a citation.
-Every atomic requirement must preserve a source quote. Return JSON only."""
+Every atomic requirement must preserve a source quote. Give atomic requirements local IDs (e.g. AR-001).
+clarification_items.requirement_ids references these atomic IDs, never source document IDs.
+Source document IDs belong in evidence_ids/retrieved_evidence_ids; ambiguity_ids references ambiguities[].id.
+Return JSON only."""
 
     def run(self, payload: RequirementInput, context: Dict[str, Any]) -> RequirementAnalysis:
         if self.llm.enabled and not context.get("force_demo"):
@@ -372,6 +375,20 @@ Every atomic requirement must preserve a source quote. Return JSON only."""
                            "Do not invent business answers.\n").format(failure.code, feedback)
                 if isinstance(result, dict):
                     prompt += "Previous analysis (untrusted task data):\n" + json.dumps(result, ensure_ascii=False)
+                if analysis is not None and context.get("clarification_policy") == "evidence_only":
+                    prompt += ("\nID namespaces: requirement_ids must reference atomic_requirements[].id; "
+                               "evidence_ids/retrieved_evidence_ids must reference supplied document IDs. "
+                               "These namespaces are distinct; do not put document IDs in requirement_ids. "
+                               "If an atomic ID is itself a source document ID, assign a local atomic ID and remap its gaps.\n" +
+                               json.dumps({"allowed_requirement_ids": [r.id for r in analysis.atomic_requirements
+                                                                         if r.id not in context.get("input_evidence", {})],
+                                           "allowed_evidence_ids": list(context.get("input_evidence", {}))}, ensure_ascii=False))
+                    quotes = [("atomic_requirements", index, r.source_quote) for index, r in enumerate(analysis.atomic_requirements)]
+                    quotes += [("clarification_items", index, g.source_quote) for index, g in enumerate(analysis.clarification_items)]
+                    prompt += "\nExact supplied-content quote matches (cite the document in evidence_ids, not requirement_ids):\n" + json.dumps([
+                        {"field": "{}[{}].source_quote".format(kind, index), "matching_evidence_ids": [
+                            doc_id for doc_id, doc in context.get("input_evidence", {}).items() if quote.strip() and quote in doc["content"]]}
+                        for kind, index, quote in quotes], ensure_ascii=False)
                 if required_ambiguities:
                     prompt += "\nPreserve these ambiguity IDs and classify them via ambiguity_ids:\n" + json.dumps(required_ambiguities, ensure_ascii=False)
         analysis = self._demo(payload, context)

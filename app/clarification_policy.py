@@ -2,6 +2,31 @@
 from .llm import LLMError
 import hashlib
 import json
+import re
+
+VALIDATION_MESSAGES = {
+    "unknown_evidence_id": "引用了本次未供应的证据 ID",
+    "duplicate_requirement_id": "原子需求 ID 重复",
+    "source_id_as_requirement": "文档 ID 不能作为原子需求 ID",
+    "ungrounded_quote": "引文不在原始需求或所引用证据的正文中",
+    "invalid_gap_id": "澄清项 ID 为空或重复",
+    "empty_text": "必填文本或场景为空",
+    "unknown_requirement_id": "应引用 atomic_requirements 的 ID，不能引用证据文档 ID",
+    "invalid_ambiguity_id": "歧义 ID 为空或重复，或问题为空",
+    "invalid_ambiguity_link": "歧义关联 ID 不存在或重复",
+    "unclassified_ambiguity": "歧义尚未关联分类",
+    "conflicting_classifications": "同一歧义存在 conflicting classifications",
+}
+
+
+def validation_diagnostics(issues):
+    """Only fixed field paths and known codes may leave validation diagnostics."""
+    if not isinstance(issues, list):
+        return []
+    return [{"field": i["field"], "code": i["code"]} for i in issues
+            if isinstance(i, dict) and isinstance(i.get("code"), str) and i["code"] in VALIDATION_MESSAGES
+            and isinstance(i.get("field"), str) and re.fullmatch(
+                r"(?:atomic_requirements|clarification_items|ambiguities|retrieved_evidence_ids)(?:\[\d+\])?(?:\.[a-z_]+)?", i["field"])][:20]
 
 POLICIES = {"strict", "evidence_only"}
 BEHAVIOR_CONTRACT = """
@@ -60,6 +85,10 @@ def validate_analysis(analysis, raw_requirement, input_evidence=None):
     """Fail closed on ungrounded model scope classifications; do not fabricate replacements."""
     ids = {r.id for r in analysis.atomic_requirements}
     evidence = input_evidence or {}
+    issues = []
+
+    def issue(field, code):
+        issues.append({"field": field, "code": code})
 
     def grounded(quote, references):
         if not quote.strip():
@@ -69,31 +98,51 @@ def validate_analysis(analysis, raw_requirement, input_evidence=None):
         return quote in raw_requirement or any(quote in evidence[ref]["content"] for ref in references)
 
     if evidence and not set(analysis.retrieved_evidence_ids) <= set(evidence):
-        raise LLMError("Analysis references unknown supplied evidence IDs", code="invalid_scope")
+        issue("retrieved_evidence_ids", "unknown_evidence_id")
     if len(ids) != len(analysis.atomic_requirements):
-        raise LLMError("Duplicate atomic requirement IDs", code="invalid_scope")
-    for requirement in analysis.atomic_requirements:
+        issue("atomic_requirements", "duplicate_requirement_id")
+    for index, requirement in enumerate(analysis.atomic_requirements):
+        prefix = "atomic_requirements[{}].".format(index)
+        if requirement.id in evidence:
+            issue(prefix + "id", "source_id_as_requirement")
+        if not set(requirement.evidence_ids) <= set(evidence):
+            issue(prefix + "evidence_ids", "unknown_evidence_id")
         if not grounded(requirement.source_quote, requirement.evidence_ids):
-            raise LLMError("Atomic requirement {} lacks original input evidence or a cited supplied source quote".format(requirement.id), code="invalid_scope")
+            issue(prefix + "source_quote", "ungrounded_quote")
     ambiguities = ambiguity_records(analysis)
     ambiguity_ids = {a["id"] for a in ambiguities}
     if len(ambiguity_ids) != len(ambiguities) or any(not a["id"].strip() or not a["question"].strip() for a in ambiguities):
-        raise LLMError("Ambiguity IDs must be unique and questions nonempty", code="invalid_scope")
+        issue("ambiguities", "invalid_ambiguity_id")
     gap_ids = set()
-    for gap in analysis.clarification_items:
-        if (gap.id in gap_ids or not gap.id.strip() or not gap.question.strip() or not gap.reason.strip()
-                or not gap.source_quote.strip() or not all(s.strip() for s in gap.affected_scenarios)
-                or not set(gap.requirement_ids) <= ids or not grounded(gap.source_quote, gap.evidence_ids)
-                or not set(gap.ambiguity_ids) <= ambiguity_ids or len(set(gap.ambiguity_ids)) != len(gap.ambiguity_ids)):
-            raise LLMError("Clarification lacks valid original input evidence or references", code="invalid_scope")
+    for index, gap in enumerate(analysis.clarification_items):
+        prefix = "clarification_items[{}].".format(index)
+        if gap.id in gap_ids or not gap.id.strip():
+            issue(prefix + "id", "invalid_gap_id")
+        for field in ("question", "reason", "affected_scenarios"):
+            value = getattr(gap, field)
+            if not (all(s.strip() for s in value) if isinstance(value, list) else value.strip()):
+                issue(prefix + field, "empty_text")
+        if not set(gap.requirement_ids) <= ids:
+            issue(prefix + "requirement_ids", "unknown_requirement_id")
+        if not set(gap.evidence_ids) <= set(evidence):
+            issue(prefix + "evidence_ids", "unknown_evidence_id")
+        if not grounded(gap.source_quote, gap.evidence_ids):
+            issue(prefix + "source_quote", "ungrounded_quote")
+        if not set(gap.ambiguity_ids) <= ambiguity_ids or len(set(gap.ambiguity_ids)) != len(gap.ambiguity_ids):
+            issue(prefix + "ambiguity_ids", "invalid_ambiguity_link")
         gap_ids.add(gap.id)
-    for original, record in zip(analysis.ambiguities, ambiguities):
+    for index, (original, record) in enumerate(zip(analysis.ambiguities, ambiguities)):
         linked = [g for g in analysis.clarification_items if record["id"] in g.ambiguity_ids
                   or (isinstance(original, str) and original.strip() == g.question.strip())]
         if not linked:
-            raise LLMError("Ambiguity {} was not classified; cannot assume nonblocking".format(record["id"]), code="invalid_scope")
-        if len({g.kind for g in linked}) != 1:
-            raise LLMError("Ambiguity {} has conflicting classifications".format(record["id"]), code="invalid_scope")
+            issue("ambiguities[{}]".format(index), "unclassified_ambiguity")
+        elif len({g.kind for g in linked}) != 1:
+            issue("ambiguities[{}]".format(index), "conflicting_classifications")
+    if issues:
+        diagnostics = validation_diagnostics(issues)
+        failure = LLMError("; ".join(i["field"] + ": " + i["code"] for i in diagnostics), code="invalid_scope")
+        failure.validation_issues = diagnostics
+        raise failure
 
 
 def behavior_blockers(project):

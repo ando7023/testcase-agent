@@ -3,7 +3,7 @@ import time
 import json
 
 from .review_policy import is_blocking
-from .clarification_policy import behavior_blockers, scope_summary
+from .clarification_policy import behavior_blockers, scope_summary, validation_diagnostics, VALIDATION_MESSAGES
 
 
 def run_failure_details(run):
@@ -40,6 +40,10 @@ def run_failure_details(run):
         details["failure_phase"] = "scope_validation" if code == "invalid_scope" else "schema_validation"
     elif code == "revision_unchanged":
         details["failure_phase"] = "repair_validation"
+    diagnostics = validation_diagnostics(observation.get("validation_issues"))
+    if diagnostics:
+        details["validation_issues"] = diagnostics
+        details["error"] += " " + "；".join(i["field"] + "：" + VALIDATION_MESSAGES[i["code"]] for i in diagnostics)
     return details
 
 
