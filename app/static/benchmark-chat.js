@@ -43,7 +43,7 @@
     case_revision: '用例修复', chat: '反馈修复', finish: '收尾', request_input: '请求确认',
     knowledge_retrieval: '知识检索', worker: '执行 Agent'};
   const agentName = name => agents[name] || name || 'Agent';
-  const statuses = {passed: '流程与质量门禁通过', completed: '流程已完成',
+  const statuses = {passed: '流程与质量门禁通过', completed: '流程已完成', supervisor_decision: 'Supervisor 决策', worker_execution: 'Worker 执行',
     quality_failed: '质量门禁未通过', waiting_input: '等待补充信息',
     waiting_confirmation: '等待模块确认', technical_failed: '技术失败',
     degraded: '存在降级，需要复核', needs_attention: '需要复核', incomplete: '尚未完成'};

@@ -417,8 +417,10 @@ class AgenticSupervisor:
                 step.observation = {"error": str(exc)[:2000], "instruction": "Replan using the error and current artifacts"}
             except LLMError as exc:
                 step.status, run.status = "error", "failed"
-                run.error = "Supervisor model call failed: " + str(exc)[:1000]
-                step.observation = {"error": run.error}
+                stage = "supervisor_decision" if step.decision is None else "worker_execution"
+                label = "Supervisor decision call" if stage == "supervisor_decision" else "Worker call"
+                run.error = label + " failed: " + str(exc)[:1000]
+                step.observation = {"error": run.error, "failure_stage": stage, "error_code": exc.code}
             except Exception as exc:
                 step.status, run.status = "error", "failed"
                 run.error = "Execution failed: " + str(exc)[:1000]

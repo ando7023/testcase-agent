@@ -108,6 +108,11 @@ class BenchmarkReliabilityTest(unittest.TestCase):
         self.assertEqual(project.cases, [])
         self.assertEqual(sample["llm_config"]["timeout_seconds"], 240)
         self.assertEqual(sample["llm_config"]["reasoning_effort"], "low")
+        self.assertEqual(sample["failure_agent"], "worker")
+        self.assertEqual(sample["failure_phase"], "error")
+        self.assertEqual(sample["failure_error_code"], "timeout")
+        self.assertFalse(sample["degraded"])
+
         self.assertTrue(sample["llm_config"]["stream"])
 
     def test_batches_cover_all_cases_and_cross_findings_require_full_verification(self):

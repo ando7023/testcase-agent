@@ -43,6 +43,7 @@ class BenchmarkExecution:
         start = time.perf_counter()
         original = worker.llm.generate_json
         calls, failures, diagnostics = [], [], []
+        failure_context = {}
         active_agent = ["supervisor" if self.execution == "agentic" else "worker"]
         def agent_event(event):
             if event["event"] == "agent_start":
@@ -87,6 +88,9 @@ class BenchmarkExecution:
             except Exception as exc:
                 status = "error"
                 failures.append(getattr(exc, "code", type(exc).__name__))
+                failure_context.update({"failure_agent": active_agent[0], "failure_call": len(calls),
+                                        "failure_phase": worker.llm.last_call_diagnostics.get("phase", "error"),
+                                        "failure_error_code": getattr(exc, "code", type(exc).__name__)})
                 raise
             finally:
                 flush()
@@ -115,6 +119,10 @@ class BenchmarkExecution:
             # only a safe class/code in the aggregate report; traces stay local.
             result.update(technical_failure=True, error_code=getattr(exc, "code", type(exc).__name__),
                           error="样本执行异常；请检查该样本的本地 Trace。")
+            failure_context.setdefault("failure_agent", active_agent[0])
+            failure_context.setdefault("failure_call", len(calls))
+            failure_context.setdefault("failure_phase", worker.llm.last_call_diagnostics.get("phase", "error"))
+            failure_context.setdefault("failure_error_code", getattr(exc, "code", type(exc).__name__))
         finally:
             worker.llm.generate_json = original
         project = result.pop("_project", None)
@@ -123,9 +131,9 @@ class BenchmarkExecution:
             project = projects[0] if projects else None
         modes = result.pop("_worker_modes", []) + ([t.mode for t in project.traces] if project else [])
         result["degraded"] = self.mode == "live" and bool(
-            result["degraded"] or failures or any(m in {"demo", "fallback"} for m in modes))
+            result["degraded"] or any(m in {"demo", "fallback"} for m in modes))
         if result["technical_failure"]:
-            result.update(status="technical_failed", quality_passed=None)
+            result.update(status="technical_failed", quality_passed=None, **failure_context)
         elif result["degraded"]:
             result.update(status="degraded", quality_passed=None)
         elif result["flow_completed"]:
