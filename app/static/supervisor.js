@@ -7,8 +7,8 @@
     $('#supervisor-status').textContent = run ? `${labels[run.status] || run.status} · ${run.mode === 'model' ? '模型决策' : '离线规则演示'} · ${run.steps.length}/${run.max_steps} 步` : '尚未运行';
     const paused = run && ['waiting_input', 'waiting_confirmation', 'budget_exhausted'].includes(run.status);
     $('#supervisor-pause').hidden = !paused;
-    $('#supervisor-question').textContent = run?.question || '';
-    $('#supervisor-continue').disabled = Boolean(run?.status === 'waiting_confirmation' && !state.project?.module_tree?.confirmed);
+    $('#supervisor-question').textContent = run?.status === 'waiting_confirmation' ? '此历史运行曾等待模块确认；现在可直接继续，预算不足时请追加步数。' : run?.question || '';
+    $('#supervisor-continue').disabled = !paused;
     $('#supervisor-log').innerHTML = (run?.error ? `<p class="supervisor-error">${escapeHtml(run.error)}</p>` : '') +
       (state.project?.human_acceptance ? `<p>当前用例人工验收：${state.project.human_acceptance.status === 'accepted' ? '已全部验收' : '尚未全部验收'} · ${state.project.human_acceptance.accepted}/${state.project.human_acceptance.total} 条已采纳。验收针对用例设计，不代表接口执行通过。</p>` : '') +
       (run?.degraded ? '<p>本次运行历史包含本地演示或回退结果；历史状态保留，当前用例的人工验收结果单独显示。</p>' : '') +
@@ -48,7 +48,7 @@
     const maxSteps = Number($('#supervisor-budget').value);
     const goal = $('#supervisor-goal').value.trim();
     if (!goal || !Number.isInteger(maxSteps) || maxSteps < 1 || maxSteps > 20) throw new Error('请填写目标和 1–20 之间的决策步数');
-    setBusy(true, 'Supervisor 正在逐步决策；到达人工确认点后会暂停…');
+    setBusy(true, 'Supervisor 正在自主规划、生成与评审；需要业务补充时会暂停…');
     const run = await api(`/api/projects/${id}/agent-runs`, {method: 'POST', body: JSON.stringify({goal, max_steps: maxSteps})});
     if (state.project?.id === id) {
       selected = run; projectId = id;

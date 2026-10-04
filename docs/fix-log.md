@@ -319,7 +319,9 @@
 - **现象与根因**：模块确认同时被 Supervisor、Orchestrator 和生成 Agent 设为前置条件，导致自主流程暂停；用户要求移除强制确认，但保留业务与质量约束。
 - **阶段 1**：修改 agents、models、orchestrator、supervisor、supervisor_models、clarification_policy，允许非空未确认模块直接生成，保持真实阻塞、评审和预算约束；新增独立 modules 目标并兼容旧确认暂停。自动推进不写入人工确认事实。同步 core、supervisor 和 clarification 测试。
 - **验证范围**：完整工作区此前 211 项离线/模拟回归通过（33.091 秒），含后续阶段改动，不作为本提交独立验证的证明。[工作区回归输出](../.local-private/autonomous-modules-tests-20261004.txt)。本阶段将另从提交快照检查核心测试；未调用真实模型。
-- **待交付**：旧运行的前端继续按钮、评测入口与模块页面集成、使用说明；后续在本项补充，不提前声明整套发布已完成。
+- **阶段 1 验证补充**：从 `ffa89bd` 提交导出的隔离快照运行 core、supervisor、clarification 三组测试，90 项通过（23.372 秒）；公开扫描 9 个提交、167 个 blob，发现 0 项，已推送。
+- **阶段 2**：`app/static/supervisor.js` 移除旧 `waiting_confirmation` 的前端继续按钮限制，并提示可直接续跑；终态继续按钮禁用。JavaScript 语法检查通过，后端旧暂停续跑已包含于阶段 1 快照测试；尚未进行浏览器视觉验收。
+- **待交付**：评测入口与模块页面集成、使用说明；后续在本项补充，不提前声明整套发布已完成。
 
 ## 后续记录模板
 
