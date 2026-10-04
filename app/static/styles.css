@@ -28,16 +28,30 @@ button { color: inherit; }
 .status-pill { padding: 6px 9px; border: 1px solid var(--line); color: var(--muted); font-size: 12px; }
 .status-pill.live { color: var(--green); border-color: #a9cbb9; background: var(--green-soft); }
 
-.workspace { min-height: calc(100vh - 68px); display: grid; grid-template-columns: 220px minmax(0, 1fr); }
-.project-rail { border-right: 1px solid var(--line); padding: 22px 14px; background: #eeece5; }
-.rail-heading { display: flex; align-items: center; justify-content: space-between; padding: 0 6px 12px; color: var(--muted); font-size: 12px; text-transform: uppercase; }
-.project-list { display: grid; gap: 5px; }
-.project-item { width: 100%; padding: 11px 10px; text-align: left; border: 0; border-left: 2px solid transparent; background: transparent; cursor: pointer; }
-.project-item:hover { background: var(--surface); }
-.project-item.active { border-left-color: var(--green); background: var(--surface); }
+.workspace { min-height: calc(100vh - 68px); display: grid; grid-template-columns: 236px minmax(0, 1fr); }
+.workspace.rail-collapsed { grid-template-columns: 56px minmax(0, 1fr); }
+.project-rail { min-width: 0; position: sticky; top: 68px; align-self: start; height: calc(100vh - 68px); display: flex; flex-direction: column; border-right: 1px solid var(--line); padding: 18px 12px; background: #eeece5; }
+.rail-heading { display: flex; align-items: center; gap: 8px; padding-bottom: 16px; color: var(--muted); font-size: 12px; }
+.rail-title { flex: 1; font-weight: 600; letter-spacing: .08em; }
+.rail-toggle { display: grid; place-items: center; width: 32px; height: 32px; flex: none; padding: 6px; border: 0; border-radius: 4px; background: transparent; color: var(--muted); cursor: pointer; }
+.rail-toggle svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width: 1.4; stroke-linecap: round; stroke-linejoin: round; }
+.rail-toggle:hover, .project-rail .icon-button:hover { background: var(--surface); color: var(--green); }
+.rail-toggle:focus-visible, .project-rail button:focus-visible { outline: 2px solid var(--green); outline-offset: 2px; }
+.project-rail .icon-button { flex: none; border-radius: 4px; border-color: transparent; color: var(--muted); }
+.rail-caption { display: none; }
+.project-list { display: grid; align-content: start; gap: 6px; min-height: 0; overflow-y: auto; padding: 2px; scrollbar-width: thin; }
+.project-list[hidden] { display: none; }
+.project-item { width: 100%; min-width: 0; padding: 12px 14px; text-align: left; border: 1px solid transparent; border-radius: 5px; background: transparent; cursor: pointer; }
+.project-item:hover { background: var(--surface); border-color: var(--line); }
+.project-item.active { color: var(--green); background: var(--green-soft); border-color: #b9d3c5; }
 .project-item strong, .project-item span { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.project-item strong { margin-bottom: 4px; font-weight: 600; }
-.project-item span { color: var(--muted); font-size: 11px; }
+.project-item strong { margin-bottom: 6px; font-size: 13px; font-weight: 600; }
+.project-item span { color: var(--muted); font-size: 11px; line-height: 1.5; }
+.rail-collapsed .project-rail { padding-inline: 12px; }
+.rail-collapsed .rail-heading { flex-direction: column; gap: 12px; }
+.rail-collapsed .rail-title { display: none; }
+.rail-collapsed .rail-caption { display: block; margin-top: 4px; color: var(--muted); font-size: 10px; text-align: center; }
+.rail-collapsed .rail-toggle svg { transform: rotate(180deg); }
 
 .main-stage { min-width: 0; padding: 0 34px 64px; }
 .pipeline { display: grid; grid-template-columns: repeat(5, 1fr); max-width: 1100px; margin: 0 auto 46px; border-bottom: 1px solid var(--line); }
@@ -261,11 +275,16 @@ a.button { display: inline-flex; align-items: center; text-decoration: none; }
   .topbar { height: auto; min-height: 68px; padding-block: 10px; gap: 12px; }
   .top-actions { flex-wrap: wrap; justify-content: flex-end; }
   .status-pill { display: none; }
-  .workspace { grid-template-columns: 1fr; }
-  .project-rail { display: block; padding: 9px 18px; overflow-x: auto; border-right: 0; border-bottom: 1px solid var(--line); }
-  .rail-heading { float: left; width: 70px; height: 52px; padding: 7px 8px 0 0; }
-  .project-list { display: flex; gap: 6px; min-width: max-content; }
+  .workspace, .workspace.rail-collapsed { grid-template-columns: minmax(0, 1fr); }
+  .project-rail { position: static; height: auto; padding: 10px 18px; border-right: 0; border-bottom: 1px solid var(--line); }
+  .rail-heading { padding-bottom: 8px; }
+  .project-list { display: flex; gap: 6px; overflow-x: auto; }
+  .project-item { flex: none; }
   .project-item { width: 170px; min-height: 52px; }
+  .rail-collapsed .project-rail { padding-inline: 18px; }
+  .rail-collapsed .rail-heading { flex-direction: row; padding-bottom: 0; gap: 8px; }
+  .rail-collapsed .rail-title { display: block; }
+  .rail-collapsed .rail-caption { display: none; }
   .main-stage { padding-inline: 18px; }
   .pipeline-step { min-height: 58px; }
   .pipeline-step span { display: none; }

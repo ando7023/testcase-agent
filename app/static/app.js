@@ -49,10 +49,11 @@ function updatePipeline() {
 
 async function loadProjects() {
   state.projects = await api('/api/projects');
+  const phaseLabels = {draft: '需求输入', analyzed: '需求理解', modules_planned: '模块规划', modules_confirmed: '模块已调整', cases_generated: '用例生成', reviewed: '已评审'};
   $('#project-list').innerHTML = state.projects.map(project => `
-    <button class="project-item ${state.project?.id === project.id ? 'active' : ''}" data-id="${project.id}">
-      <strong>${escapeHtml(project.title)}</strong><span>${escapeHtml(project.phase)} · ${project.updated_at.slice(0, 10)}</span>
-    </button>`).join('') || '<div class="compact-item">No projects yet</div>';
+    <button type="button" class="project-item ${state.project?.id === project.id ? 'active' : ''}" data-id="${escapeHtml(project.id)}" title="${escapeHtml(project.title)}" ${state.project?.id === project.id ? 'aria-current="page"' : ''}>
+      <strong>${escapeHtml(project.title)}</strong><span>${escapeHtml(phaseLabels[project.phase] || project.phase)} · ${escapeHtml(project.updated_at.slice(0, 10))}</span>
+    </button>`).join('') || '<div class="compact-item">暂无任务，点击 ＋ 新建</div>';
   document.querySelectorAll('.project-item').forEach(button => button.addEventListener('click', () => openProject(button.dataset.id)));
 }
 

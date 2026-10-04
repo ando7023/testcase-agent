@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>CaseForge · 智能用例工坊</title>
-  <link rel="stylesheet" href="/static/styles.css?v=benchmark-chat1">
+  <link rel="stylesheet" href="/static/styles.css?v=project-rail1">
 </head>
 <body>
   <header class="topbar">
@@ -22,11 +22,15 @@
   </header>
 
   <main class="workspace">
-    <aside class="project-rail">
+    <aside class="project-rail" aria-label="任务导航">
       <div class="rail-heading">
-        <span>任务</span>
-        <button class="icon-button" id="new-project" type="button" title="新建任务">＋</button>
+        <button class="rail-toggle" id="project-rail-toggle" type="button" aria-controls="project-list" aria-expanded="true" aria-label="收起任务栏" title="收起任务栏">
+          <svg viewBox="0 0 20 20" aria-hidden="true"><rect x="2.5" y="3" width="15" height="14" rx="2"/><path d="M7 3v14m6-10-3 3 3 3"/></svg>
+        </button>
+        <span class="rail-title">任务</span>
+        <button class="icon-button" id="new-project" type="button" title="新建任务" aria-label="新建任务">＋</button>
       </div>
+      <span class="rail-caption" aria-hidden="true">任务</span>
       <div id="project-list" class="project-list"></div>
     </aside>
 
@@ -233,7 +237,8 @@ CheckEquipmentAvailability 只查询库存，不改变申请状态；UpdateBorro
     <button class="button primary" id="memory-version-restore" type="button" disabled>恢复到所选旧版本</button>
   </dialog>
   <script src="/static/benchmark-chat.js?v=benchmark-errors1"></script>
-  <script src="/static/app.js?v=requirement-scope1"></script>
+  <script src="/static/project-rail.js?v=project-rail1"></script>
+  <script src="/static/app.js?v=project-rail1"></script>
   <script src="/static/module-workspace.js?v=autonomous1"></script>
   <script src="/static/case-workspace.js?v=feedback2"></script>
   <script src="/static/chunk-manager.js?v=chunk5"></script>
