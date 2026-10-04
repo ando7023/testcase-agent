@@ -82,13 +82,43 @@ class ReviewPolicyTest(unittest.TestCase):
         repaired = revision.run({**self.payload, "review": result["review"]}, {})
         self.assertEqual(repaired["cases"], self.payload["cases"])
 
-    def test_unsupported_evidence_or_unknown_requirement_requires_clarification(self):
+    def test_unsupported_evidence_or_unknown_requirement_is_technical_failure(self):
         for changes in [{"evidence": "并不存在的缓存机制"}, {"requirement_ids": ["AR-FAKE"]}, {"disposition": "unknown"}]:
             item = self.finding();item.update(changes)
             f = ReviewFinding.model_validate(self.review({"findings": [item]})["review"]["findings"][0])
-            self.assertEqual(f.disposition, "clarification")
+            self.assertEqual(f.category, "review_incomplete")
+            self.assertEqual(f.detail, "invalid_schema")
             self.assertTrue(is_blocking(f))
             self.assertFalse(is_auto_fixable(f))
+
+    def test_quote_feedback_preserves_nonblocking_suggestion(self):
+        prompts = []
+        def generate(system, user, schema):
+            prompts.append((system, user))
+            item = self.finding()
+            if len(prompts) == 1:
+                item["evidence"] = 'action": "' + item["evidence"]
+            return {"findings": [item]}
+        result = CaseReviewAgent(SimpleNamespace(enabled=True, generate_json=generate)).run(self.payload, {})
+        self.assertEqual(len(prompts), 2)
+        self.assertEqual(prompts[0][1], prompts[1][1])
+        self.assertIn("findings[0].evidence", prompts[1][0])
+        f = ReviewFinding.model_validate(result["review"]["findings"][0])
+        self.assertEqual(f.disposition, "suggestion")
+        self.assertFalse(is_blocking(f))
+        self.assertEqual(result["cases"][0]["review_status"], "approved")
+
+    def test_quote_retry_does_not_discard_high_defect(self):
+        calls = []
+        def generate(*args):
+            calls.append(args)
+            return {"findings": [{**self.finding(), "severity": "high", "disposition": "defect",
+                                   "evidence": 'action": "' + self.finding()["evidence"]}]}
+        result = CaseReviewAgent(SimpleNamespace(enabled=True, generate_json=generate)).run(self.payload, {})
+        self.assertEqual(len(calls), 2)
+        self.assertEqual(result["review"]["findings"][0]["category"], "review_incomplete")
+        self.assertEqual(result["review"]["findings"][0]["detail"], "invalid_schema")
+        self.assertEqual(result["cases"][0]["review_status"], "needs_attention")
 
     def test_high_severity_cannot_be_hidden_as_a_suggestion(self):
         for severity in ["high", "critical", "error"]:
@@ -105,7 +135,7 @@ class ReviewPolicyTest(unittest.TestCase):
         self.assertEqual(result["review"]["findings"][0]["disposition"], "suggestion")
         item["evidence"] = "project_context"
         result = self.review({"findings": [item]})
-        self.assertEqual(result["review"]["findings"][0]["disposition"], "clarification")
+        self.assertEqual(result["review"]["findings"][0]["category"], "review_incomplete")
 
     def test_legacy_findings_keep_conservative_gate(self):
         f = ReviewFinding(category="semantic", severity="low", case_id="C1", message="旧问题")

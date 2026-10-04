@@ -1441,19 +1441,70 @@ Return JSON: {"findings": [{"severity": "high|medium|low", "case_id": "...",
     }
 
     def _generate_critique(self, user_prompt, context=None):
-        # Only syntax failures get one bounded retry of the full review request.
-        # Never extract a partial answer or discard trailing review conclusions.
+        # A malformed finding is a review protocol failure, not evidence that
+        # the user owes us a new business contract. Retry the same complete
+        # request once; never accept partial findings from the failed attempt.
+        request = json.loads(user_prompt)
+        feedback = ""
         for attempt in range(2):
             system = policy_system(self.CRITIQUE_SYSTEM, context or {})
             if attempt:
-                system += ("\nThe previous response failed JSON parsing. Regenerate the complete review "
-                           "from the same input. Return a single valid JSON object only; put all "
-                           "findings inside the array and stop immediately after the closing brace.")
+                system += ("\n" + feedback + " Regenerate the complete review from the same input. "
+                           "Return one valid JSON object with all findings inside the array. "
+                           "Quote exact text values, without JSON field names or added explanations. "
+                           "Keep supported issues and their severity; do not invent business rules, "
+                           "discard issues to pass validation, or turn formatting errors into business clarification.")
             try:
-                return self.llm.generate_json(system, user_prompt, self.CRITIQUE_SCHEMA)
+                result = self.llm.generate_json(system, user_prompt, self.CRITIQUE_SCHEMA)
+                self._validate_critique_response(result, request)
+                return result
             except LLMError as exc:
-                if attempt or exc.code != "invalid_json":
+                if attempt or exc.code not in {"invalid_json", "invalid_schema"}:
                     raise
+                feedback = ("The previous response failed JSON parsing." if exc.code == "invalid_json"
+                            else "The previous response failed review validation: " + str(exc))
+
+    @staticmethod
+    def _validate_critique_response(result, request):
+        def invalid(field):
+            # Field paths and fixed explanations only, no provider content.
+            raise LLMError("Review field " + field + " is invalid", code="invalid_schema")
+
+        if not isinstance(result, dict) or not isinstance(result.get("findings"), list):
+            invalid("findings (array required)")
+        if len(result["findings"]) > 20:
+            invalid("findings (maximum 20 per response)")
+        screening = request.get("review_phase") == "cross_batch_screen"
+        case_map = {c["id"]: c for c in request.get("case_cards" if screening else "cases", [])}
+        known_requirements = {r["id"] for r in request.get("analysis", {}).get("atomic_requirements", [])}
+        source = {key: request.get(key) for key in
+                  ("raw_requirement", "input_evidence", "project_context", "analysis", "user_constraints")}
+        for index, item in enumerate(result["findings"]):
+            prefix = "findings[{}].".format(index)
+            if not isinstance(item, dict):
+                invalid(prefix + "object")
+            if not isinstance(item.get("case_id"), str) or item["case_id"] not in case_map:
+                invalid(prefix + "case_id (must belong to this batch)")
+            if not isinstance(item.get("message"), str) or not item["message"].strip():
+                invalid(prefix + "message")
+            for field, allowed in [("severity", {"low", "medium", "high", "critical", "error"}),
+                                   ("disposition", {"defect", "clarification", "suggestion"}),
+                                   ("issue_type", ISSUE_TYPES)]:
+                if not isinstance(item.get(field), str) or item[field] not in allowed:
+                    invalid(prefix + field)
+            ids = item.get("requirement_ids")
+            if not isinstance(ids, list) or any(not isinstance(i, str) for i in ids) or not set(ids) <= known_requirements:
+                invalid(prefix + "requirement_ids (unknown requirement)")
+            quote = item.get("evidence")
+            if (not isinstance(quote, str) or not quote.strip() or
+                    (not screening and not contains_evidence([source, case_map[item["case_id"]]], quote))):
+                invalid(prefix + "evidence (exact supplied text value required)")
+            if screening:
+                related = item.get("related_case_ids")
+                if (not isinstance(related, list) or any(not isinstance(i, str) for i in related)
+                        or not 2 <= len(set(related)) <= 12 or item["case_id"] not in related
+                        or not set(related) <= set(case_map)):
+                    invalid(prefix + "related_case_ids")
 
     def run(self, payload: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
         analysis = RequirementAnalysis.model_validate(payload["analysis"])
@@ -1626,6 +1677,7 @@ Return JSON: {"findings": [{"severity": "high|medium|low", "case_id": "...",
                     "output_limit": "模型输出达到长度限制（finish_reason=length），未返回完整评审；请调整思考强度或输出上限后重试",
                     "timeout": "模型读取超时，请检查连接或请求超时配置后重试",
                     "invalid_json": "模型响应不是有效 JSON，请检查响应格式后重试",
+                    "invalid_schema": "评审引文或分类未通过校验，反馈修正后仍不符合约定；这是评审技术失败，无需补充业务契约",
                     "incomplete_response": "模型响应中断或未正常完成，请检查服务状态后重试",
                     "request_failed": "模型请求失败或评审响应不符合约定，请检查调用诊断后重试",
                     "context_limit": "评审输入或分批调用数量超过限制，请缩小用例集或拆分过长内容后重试",
