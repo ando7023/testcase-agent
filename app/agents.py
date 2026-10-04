@@ -1477,6 +1477,15 @@ Return JSON: {"findings": [{"severity": "high|medium|low", "case_id": "...",
                 )
 
         module_counts = Counter(case.module_id for case in cases)
+        # Grouping modules inherit coverage from their descendants. A case on
+        # the parent never substitutes for an empty child branch.
+        def covered_count(module):
+            count = module_counts[module.id] + sum(covered_count(child) for child in module.children)
+            module_counts[module.id] = count
+            return count
+
+        for root in tree.modules:
+            covered_count(root)
         for module in ModulePlanningAgent._walk(tree.modules):
             if not module_counts[module.id]:
                 findings.append(
