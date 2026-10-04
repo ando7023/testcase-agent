@@ -21,7 +21,7 @@
     $('#memory-version-save-row').hidden = kind() === 'fact';
     $('#memory-version-restore-note').textContent = kind() === 'fact'
       ? '事实回滚会新建版本，保留原历史与作用域。仅允许恢复同一版本链的祖先；过期或无法核对原有效期的版本需显式修订。'
-      : '整体恢复包含项目产物、会话与决策记忆、项目长期事实、示例和 badcase；共享团队规则与运行历史保留。恢复前自动备份，恢复后重新确认模块和评审；后续人工拒绝不会被旧快照覆盖。';
+      : '整体恢复包含项目产物、会话与决策记忆、项目长期事实、示例和 badcase；共享团队规则与运行历史保留。恢复前自动备份，恢复后重新评审；后续人工拒绝不会被旧快照覆盖。';
     $('#memory-version-compare').disabled = !entries.length;
     message(entries.length ? '选择版本后点击对比差异。' : '暂无版本。可以先保存当前项目快照。');
   }
@@ -99,7 +99,7 @@
         const result = await api(`/api/projects/${encodeURIComponent(selected.projectId)}/memory-versions/restore`, {method: 'POST', body: JSON.stringify({snapshot_id: selected.left, expected_fingerprint: selected.current_fingerprint})});
         if (state.project?.id === selected.projectId) { state.project = result.project; renderProject(); }
         await loadProjects(); await loadContext(); await refresh();
-        message(`已恢复。恢复前备份：${result.backup_id}。请重新确认模块并评审。`);
+        message(`已恢复。恢复前备份：${result.backup_id}。可继续生成，请重新评审。`);
       }
     } catch (error) { message(error.message); clear(); }
     finally { busy = false; }

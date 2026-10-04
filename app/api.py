@@ -204,7 +204,7 @@ class BenchmarkRunCreate(BaseModel):
     split: str = Field(default="test", pattern="^(development|validation|test|all)$")
     mode: str = Field(default="offline", pattern="^(offline|live)$")
     execution: Literal["workflow", "agentic"] = "workflow"
-    human_policy: Literal["pause", "simulate_confirm"] = "pause"
+    human_policy: Literal["pause", "simulate_confirm"] = "pause"  # Legacy compatibility; no confirmation gate.
     clarification_policy: Literal["strict", "evidence_only"] = "strict"
     max_steps: int = Field(default=12, ge=1, le=20)
     stream: bool = True

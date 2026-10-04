@@ -111,15 +111,15 @@ class PublicBenchmarkTests(unittest.TestCase):
         return service.run("ebt_generation", 1, "test", "offline",
                            lambda root: TestCaseOrchestrator(JsonStore(root)), **options)
 
-    def test_default_waits_for_confirmation(self):
+    def test_default_generates_without_confirmation(self):
         result = self._run()
         sample = result["samples"][0]
-        self.assertEqual(sample["run_status"], "waiting_confirmation")
-        self.assertFalse(sample["flow_completed"])
-        self.assertIsNone(sample["quality_passed"])
-        self.assertEqual(sample["generated_case_count"], 0)
+        self.assertEqual(sample["run_status"], "completed")
+        self.assertTrue(sample["flow_completed"])
+        self.assertIsNotNone(sample["quality_passed"])
+        self.assertGreater(sample["generated_case_count"], 0)
         self.assertEqual(sample["simulated_confirmations"], [])
-        self.assertEqual(result["status"], "incomplete")
+        self.assertFalse(result["module_confirmation_required"])
 
     def test_agentic_runs_supervisor_and_explicit_confirmation(self):
         result = self._run(execution="agentic", human_policy="simulate_confirm")
@@ -128,8 +128,7 @@ class PublicBenchmarkTests(unittest.TestCase):
         self.assertEqual(sample["run_status"], "completed")
         self.assertTrue(sample["run_id"].startswith("AR-"))
         self.assertIn("finish", [a["capability"] for a in sample["actions"]])
-        self.assertEqual(sample["simulated_confirmations"],
-                         [{"source": "benchmark_simulator", "action": "confirm_modules"}])
+        self.assertEqual(sample["simulated_confirmations"], [])
         self.assertEqual(sample["validation_level"], "offline_structural")
         workspace = self.root / result["workspace"] / sample["workspace"]
         self.assertNotIn('"human_gate"', "\n".join(p.read_text(encoding="utf-8") for p in workspace.rglob("*.json")))
@@ -241,8 +240,8 @@ class PublicBenchmarkTests(unittest.TestCase):
         sample = result["samples"][0]
         self.assertTrue(sample["flow_completed"], sample)
         self.assertEqual(sample["completion_criterion"], "modules_planned")
-        self.assertEqual(sample["run_status"], "waiting_confirmation")
-        self.assertNotIn("case_generator", [a["capability"] for a in sample["actions"]])
+        self.assertEqual(sample["run_status"], "completed")
+        self.assertNotIn("case_generation", [a["capability"] for a in sample["actions"]])
         self.assertEqual(sample["simulated_confirmations"], [])
 
     def test_srs_does_not_invent_quality_gate(self):

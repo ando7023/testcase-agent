@@ -157,7 +157,7 @@
       this.started = this.received = Date.now();
       this.status.textContent = '正在启动';
       this.message('你', `${label}\n${payload.mode === 'live' ? '真实模型' : '离线模式'} · ${payload.execution === 'agentic' ? 'Agentic 动态编排' : 'Workflow 固定流程'}${payload.mode === 'live' ? (payload.stream ? ' · 流式正文' : ' · 非流式正文') : ''}`, 'user');
-      this.message('评测范围', `${payload.clarification_policy === 'evidence_only' ? '按原文生成行为级用例，执行细节单独记录；关键歧义仍会暂停。' : '严格澄清。'}${payload.human_policy === 'simulate_confirm' ? ' 仅模拟模块确认，不回答业务问题。' : ' 保留模块确认暂停。'}`, 'stage');
+      this.message('评测范围', `${payload.clarification_policy === 'evidence_only' ? '按原文生成行为级用例，执行细节单独记录；关键歧义仍会暂停。' : '严格澄清。'} 模块规划后自主推进，不补造业务答案。`, 'stage');
       const tick = () => {
         const elapsed = Math.floor((Date.now() - this.started) / 1000);
         const quiet = Math.floor((Date.now() - this.received) / 1000);

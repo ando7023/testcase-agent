@@ -52,7 +52,7 @@ function renderModules() {
   if (!tree) return;
   const moduleReview = state.project.module_review;
   $('#modules-view').innerHTML = `
-    <div class="section-intro"><span class="eyebrow">MODULE AGENT · CONVERSATION MEMORY · HUMAN GATE</span><h1>生成、讨论，再确认模块边界。</h1><p>支持全量、重生成、继续生成和指定模块生成；每轮对话都会保存会话与模块快照，并重新运行 Critic。</p></div>
+    <div class="section-intro"><span class="eyebrow">MODULE AGENT · CONVERSATION MEMORY</span><h1>规划模块，自主推进。</h1><p>规划后无需确认即可生成用例。支持按需调整模块；每轮对话保存会话与模块快照，并重新运行 Critic。</p></div>
     <div class="module-modebar">
       <div class="module-mode-actions">
         <button class="button ghost module-operation" data-mode="regenerate">重新生成</button>
@@ -74,14 +74,15 @@ function renderModules() {
         <div class="mindmap-shell" id="module-mindmap" hidden></div>
         ${moduleReview ? `<div class="score-layout"><div class="score-box"><strong>${moduleReview.score}</strong><span>模块质量 / 100</span><small>自动优化 ${moduleReview.rounds || 0} 轮</small></div><div><h3>模块发现 · ${moduleReview.findings.length}</h3>${moduleReview.findings.map(item => `<div class="finding"><b>${escapeHtml(item.severity)}</b><span>${escapeHtml(item.message)}</span></div>`).join('') || '<div class="finding"><b>PASS</b><span>模块结构检查通过</span></div>'}</div></div>` : ''}
         <div class="module-list">${moduleRows(tree.modules)}</div>
-        <div class="section-actions"><span>${tree.confirmed ? '模块树已确认；继续修改会重新打开人工门禁。' : '确认后才能进入用例生成。'}</span>
-          ${tree.confirmed ? '<button class="button primary" id="generate-cases">生成测试用例</button>' : '<button class="button primary" id="confirm-modules">确认模块树</button>'}
+        <div class="section-actions"><span>无需人工确认即可生成。手动编辑后请先保存。</span>
+          ${tree.confirmed ? '' : '<button class="button ghost" id="confirm-modules">保存并确认修改（可选）</button>'}
+          <button class="button primary" id="generate-cases">生成测试用例</button>
         </div>
       </section>
       ${moduleConversationPanel()}
     </div>`;
-  if (tree.confirmed) $('#generate-cases').addEventListener('click', () => runCaseOperation('full'));
-  else $('#confirm-modules').addEventListener('click', confirmModules);
+  $('#generate-cases').addEventListener('click', () => runCaseOperation('full'));
+  if (!tree.confirmed) $('#confirm-modules').addEventListener('click', confirmModules);
   document.querySelectorAll('.module-operation').forEach(button => button.addEventListener('click', () => {
     const mode = button.dataset.mode;
     const target = mode === 'targeted' ? $('#module-target-select').value : '';

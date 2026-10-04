@@ -126,7 +126,7 @@ function renderModules() {
   if (!tree) return;
   const moduleReview = state.project.module_review;
   $('#modules-view').innerHTML = `
-    <div class="section-intro"><span class="eyebrow">MODULE AGENT · CRITIQUE · HUMAN GATE</span><h1>先确认覆盖，再批量生成。</h1><p>模块代表测试关注点而不是页面目录。确认前已完成结构 Critique 和可修复问题优化。</p></div>
+    <div class="section-intro"><span class="eyebrow">MODULE AGENT · CRITIQUE</span><h1>规划测试范围，自主生成用例。</h1><p>模块代表测试关注点而不是页面目录。Agentic 会在规划后继续生成；你也可以按需编辑模块。</p></div>
     <div class="mindmap-actions">
       <button class="button ghost" onclick="toggleMindMap('module-mindmap', 'modules', this)">脑图视图</button>
       <a class="button ghost" href="/api/projects/${state.project.id}/xmind/modules">导出 XMind</a>
@@ -141,11 +141,12 @@ function renderModules() {
         <label>测试目标<textarea class="module-objective" ${tree.confirmed ? 'disabled' : ''}>${escapeHtml(module.objective)}</textarea></label>
         <div class="module-meta">${module.requirement_ids.map(id => `<span class="tag">${id}</span>`).join('')}${module.risks.map(risk => `<span class="tag risk">${escapeHtml(risk)}</span>`).join('')}</div>
       </div>`).join('')}</div>
-    <div class="section-actions"><span>${tree.confirmed ? '模块树已确认，可以生成用例。' : '这是关键人工门禁，确认后才能生成用例。'}</span>
-      ${tree.confirmed ? '<button class="button primary" id="generate-cases">生成测试用例</button>' : '<button class="button primary" id="confirm-modules">确认模块树</button>'}
+    <div class="section-actions"><span>模块规划已就绪，无需人工确认即可生成。编辑后请先保存。</span>
+      ${tree.confirmed ? '' : '<button class="button ghost" id="confirm-modules">保存并确认修改（可选）</button>'}
+      <button class="button primary" id="generate-cases">生成测试用例</button>
     </div>`;
-  if (tree.confirmed) $('#generate-cases').addEventListener('click', () => runAction(`/api/projects/${state.project.id}/cases`, '用例 Agent 正在组合工单测试 Skills…'));
-  else $('#confirm-modules').addEventListener('click', confirmModules);
+  $('#generate-cases').addEventListener('click', () => runAction(`/api/projects/${state.project.id}/cases`, '用例 Agent 正在组合测试 Skills…'));
+  if (!tree.confirmed) $('#confirm-modules').addEventListener('click', confirmModules);
 }
 
 async function confirmModules() {
@@ -476,7 +477,7 @@ function renderBenchmarkReport(report) {
   }).join('');
   $('#benchmark-result').innerHTML = `
     <div class="benchmark-score ${report.schema_version === 2 ? 'benchmark-score-v2' : ''}"><strong>${report.schema_version === 2 ? '分项' : Number(report.score || 0)}</strong><span>${escapeHtml(report.dataset_id)}<br>${report.sample_count || 0} samples · ${escapeHtml(report.mode || 'offline')} · ${escapeHtml(report.execution || '旧版固定流程')} · ${escapeHtml(report.status || '')}</span></div>
-    <p class="benchmark-lead">${report.schema_version === 2 ? `${report.mode === 'offline' ? '离线规则回归，不代表模型能力。' : '模型评测；质量通过仅代表内部门禁，不代表独立业务验收。'} ${report.human_policy === 'simulate_confirm' ? '已选择模拟模块确认，不自动回答业务澄清或追加预算。' : '保留人工确认暂停。'} ${escapeHtml(report.metric_notes || '')}` : '旧版报告：综合分、passed 和成功率沿用旧口径，不能作为完整 Agentic 质量结论。'}</p>
+    <p class="benchmark-lead">${report.schema_version === 2 ? `${report.mode === 'offline' ? '离线规则回归，不代表模型能力。' : '模型评测；质量通过仅代表内部门禁，不代表独立业务验收。'} ${report.module_confirmation_required === false ? '模块规划后自主推进，无需人工确认。' : report.human_policy === 'simulate_confirm' ? '已选择模拟模块确认，不自动回答业务澄清或追加预算。' : '保留人工确认暂停。'} ${escapeHtml(report.metric_notes || '')}` : '旧版报告：综合分、passed 和成功率沿用旧口径，不能作为完整 Agentic 质量结论。'}</p>
     <div class="benchmark-metrics">${metrics}</div>
     ${configuration ? `<p class="benchmark-lead">实际配置：${escapeHtml(configuration)}</p>` : ''}
     ${report.clarification_policy ? `<p class="benchmark-lead">澄清策略：${report.clarification_policy === 'evidence_only' ? '按原文生成行为级用例；通过只表示行为设计门禁通过，不代表可直接执行。' : '严格澄清；通过不替代实际环境验收。'}</p>` : ''}
@@ -516,14 +517,13 @@ function updateBenchmarkOptions() {
   const allowsAgentic = (suite?.executions || []).includes('agentic');
   $('#benchmark-execution').querySelector('[value="agentic"]').disabled = !allowsAgentic;
   if (!allowsAgentic) $('#benchmark-execution').value = 'workflow';
-  $('#benchmark-human-policy').disabled = suite?.id !== 'ebt_generation';
   $('#benchmark-clarification-policy').disabled = !allowsAgentic;
   $('#benchmark-max-steps').disabled = $('#benchmark-execution').value !== 'agentic';
   $('#benchmark-split').disabled = suite?.id !== 'storyseek_pipeline';
   $('#benchmark-limit').disabled = suite?.id === 'critic_mutation';
   $('#benchmark-execution-note').textContent = suite?.id === 'critic_mutation'
     ? '固定运行 4 个结构缺陷样本和 1 个基线；真实模式会调用模型评审。'
-    : suite?.id === 'storyseek_pipeline' ? '评测止于需求理解和模块规划；等待模块确认是该子任务的正常终点。'
+    : suite?.id === 'storyseek_pipeline' ? '评测止于需求理解和模块规划；完成模块评审后收尾。'
     : suite?.id === 'srs_document' ? '文档解析专项，不经过 Supervisor。'
     : 'Agentic 使用真实 Supervisor；每个样本独立运行，不自动追加预算。';
 }
@@ -542,7 +542,7 @@ $('#benchmark-form').addEventListener('submit', async event => {
       limit: Number($('#benchmark-limit').value),
       mode,
       execution: $('#benchmark-execution').value,
-      human_policy: $('#benchmark-human-policy').disabled ? 'pause' : $('#benchmark-human-policy').value,
+      human_policy: 'pause', // Legacy API field; module confirmation is no longer required.
       clarification_policy: $('#benchmark-clarification-policy').disabled ? 'strict' : $('#benchmark-clarification-policy').value,
       max_steps: Number($('#benchmark-max-steps').value),
       stream: $('#benchmark-stream').value === 'true',

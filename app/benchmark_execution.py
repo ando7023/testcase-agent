@@ -164,40 +164,24 @@ class BenchmarkExecution:
         run = None
         confirmations = []
 
-        def confirm():
-            # This is an explicitly selected benchmark fixture, NOT a human
-            # acceptance event. Do not write human_gate facts/feedback.
-            project.module_tree.confirmed = True
-            worker.store.save_project(project)
-            confirmations.append({"source": "benchmark_simulator", "action": "confirm_modules"})
-
         if self.execution == "agentic":
             from .supervisor import AgenticSupervisor
             controller = AgenticSupervisor(worker, on_event=self.emit)
-            goal = ("仅完成需求理解与模块规划，随后请求人工确认模块，不生成用例。" if target == "modules" else
+            goal = ("仅完成需求理解、模块规划和模块评审后收尾，不生成用例。" if target == "modules" else
                     "生成满足需求的测试用例，根据评审反馈修复并完成收尾；按配置的澄清策略判断缺失信息，不能补造契约。")
-            run = controller.start(project.id, goal, self.max_steps)
+            run = controller.start(project.id, goal, self.max_steps, target=target)
             project = worker.store.get_project(project.id)
-            if (target == "cases" and run.status == "waiting_confirmation" and
-                    self.human_policy == "simulate_confirm" and len(run.steps) < run.max_steps and
-                    not behavior_blockers(project) and not self._module_blocked(project) and
-                    project.module_tree and project.module_tree.modules):
-                confirm()
-                run = controller.resume(project.id, run.id)
-                project = worker.store.get_project(project.id)
             status = run.status
-            complete = (status in {"completed", "needs_attention"} if target == "cases" else
-                        status == "waiting_confirmation" and bool(project.analysis and project.module_tree and project.module_tree.modules))
+            complete = status in {"completed", "needs_attention"}
         else:
             project = worker.analyze(project)
             project = worker.plan_modules(project)
             complete = bool(project.analysis and project.module_tree and project.module_tree.modules)
-            status = "completed" if target == "modules" else "waiting_confirmation"
+            status = "completed" if complete else "waiting_input"
             if target == "cases":
                 complete = False
-                if (self.human_policy == "simulate_confirm" and project.module_tree and project.module_tree.modules
+                if (project.module_tree and project.module_tree.modules
                         and not behavior_blockers(project) and not self._module_blocked(project)):
-                    confirm()
                     project = worker.generate_cases(project)
                     project = worker.review(project)
                     complete, status = True, "completed"
@@ -223,7 +207,8 @@ class BenchmarkExecution:
                   "completion_criterion": "finish" if target == "cases" else "modules_planned",
                   "run_id": run.id if run else None, "run_status": run.status if run else status,
                   "steps": len(run.steps) if run else 0,
-                  "question": run.question if run else ("模块等待确认；批量生成需显式选择模拟确认。" if status == "waiting_confirmation" else "")}
+                  "question": run.question if run else "",
+                  "module_confirmation_required": False}
         if incomplete:
             result["error_code"] = "review_incomplete"
         if run:
@@ -238,5 +223,5 @@ class BenchmarkExecution:
 
     @staticmethod
     def _module_blocked(project):
-        return (project.clarification_policy == "evidence_only" and project.module_review
-                and any(f.severity in {"high", "critical", "error"} for f in project.module_review.findings))
+        return (project.module_review and any(f.severity in {"high", "critical", "error"}
+                or f.category == "review_incomplete" for f in project.module_review.findings))

@@ -6,7 +6,7 @@
 
 1. 选择评测套件和离线 / 真实模型模式。
 2. EBT、StorySeek 可选 Workflow 或 Agentic。Workflow 按固定顺序调用 Worker；Agentic 调用项目的 `AgenticSupervisor.start/resume`，使用相同的决策、执行、评审及预算门禁。
-3. EBT 默认停在模块确认。批量运行完整生成流程需显式选择「模拟确认模块」；报告记录 `benchmark_simulator`，不会生成代表真人操作的确认事实。
+3. EBT 在模块规划后自动进入生成与评审，无需人工或模拟确认。不会生成代表真人操作的确认事实。
 4. Agentic 可设置 1–20 步，默认 12 步。模拟确认最多续跑一次，不回答业务澄清、不增加预算。暂停或预算耗尽会作为未完成样本保留。
 5. 网页评测默认使用流式、`reasoning_effort=low`、连接/读取超时 180 秒，可在表单修改。它们覆盖当前样本客户端配置，不修改 `.env`，也不继承手动脚本的参数。模型名称、输出上限等仍来自服务端配置，报告保存实际取值。
 
@@ -17,7 +17,7 @@
 | 套件 | 支持入口 | 完成条件 | 指标边界 |
 | --- | --- | --- | --- |
 | EBT 用例生成 | Workflow / Agentic | Workflow 生成并评审；Agentic 执行 finish（含需关注的降级收尾） | 词元重合是代理指标；质量门禁是内部 Critic，不是独立业务验收 |
-| StorySeek 需求与模块 | Workflow / Agentic | 需求与非空模块规划完成；Agentic 停在模块确认 | 不评测用例生成/修复/收尾；输入含用户故事字段，召回衡量信息保留，不是隐藏答案预测 |
+| StorySeek 需求与模块 | Workflow / Agentic | 需求与非空模块规划完成；Agentic 完成模块评审后收尾 | 不评测用例生成/修复/收尾；输入含用户故事字段，召回衡量信息保留，不是隐藏答案预测 |
 | SRS 文档解析 | Workflow 组件 | 得到非空原文与规范化文本 | 只报告解析指标，质量门禁为未评定，不宣称完成 Agentic |
 | Critic 缺陷检测 | Workflow 组件 | 完成该次评审调用 | 固定 4 种结构变异 + 1 个未人工语义标注的基线；真实模式调用模型，但缺陷召回不是语义评审准确率 |
 
@@ -43,7 +43,7 @@ EBT / StorySeek 网页新增「澄清策略」，默认推荐 **按原文生成�
 
 行为级 Critic 不再普遍强制 functional/boundary/exception 三类，而按实际原子需求检查覆盖。每条用例仍需有效需求关联、来源和预期结果。评审中的非阻塞澄清需要分类、理由、有效需求引用与可核对引文；旧/未分类/依据无效的澄清仍阻塞，高危、真实缺陷和 `review_incomplete` 也仍阻塞。不会把未定义契约写成断言后再用“执行细节”豁免该缺陷。
 
-**模块确认与业务澄清独立。** 想测完整 EBT 闭环，请选择：Agentic → 按原文生成行为级用例 → 模拟确认模块。模拟器只确认无关键歧义、无高危模块评审问题的模块树，不生成业务答案；保留“在确认点暂停”则仍会正常停下。StorySeek 的评测终点仍是模块规划，不扩展为用例生成。
+**模块确认已改为可选操作。** 测完整 EBT 闭环请选择 Agentic → 按原文生成行为级用例，规划后自动生成与评审。真实关键歧义、高危模块问题仍阻塞收尾。StorySeek 使用独立 modules 目标，模块评审完成即收尾，不生成用例。旧 API 的 `human_policy` 两个值保留兼容，但不再触发确认暂停或模拟确认；新报告标记 `module_confirmation_required=false`，旧报告保持原样。
 
 报告保存策略、`case_design_level`、`execution_readiness`、分析澄清项、评审澄清项、受阻与未关联用例的需求 ID；页面样本明细可展开「范围与执行准备」。`behavior` 仅表示行为级设计；`needs_preparation` 表示执行条件未齐，`not_assessed` 表示未验收可执行性，`blocked` 表示存在阻塞。没有任何一种结果自动代表已在实际环境执行或验收通过。行为级质量通过率衡量该策略下的内部门禁，不与严格模式混算。
 
@@ -101,7 +101,7 @@ Invoke-RestMethod -Uri 'http://127.0.0.1:8765/api/benchmarks/run' `
     -Method Post -ContentType 'application/json' -Body $payload
 ```
 
-将 `execution` 改为 `workflow` 可对比固定流程；将 `human_policy` 改为 `pause` 可检查人工确认门禁。真实调用需要主动设置 `mode='live'`。
+将 `execution` 改为 `workflow` 可对比固定流程；`human_policy` 为兼容旧客户端保留，不再控制模块门禁。真实调用需要主动设置 `mode='live'`。
 
 `/api/benchmarks/run` 保留同步 JSON 返回，适用于脚本。网页改用下述流式入口。后续评测应增加独立业务标注、重复运行及相同模型/数据/预算下的对照，不以入口修正宣称模型效果提升。
 

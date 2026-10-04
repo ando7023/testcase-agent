@@ -395,7 +395,7 @@ class PublicBenchmarkService:
                 key: payload.get(key)
                 for key in (
                     "report_id", "suite", "dataset_id", "mode", "status", "schema_version", "execution", "human_policy",
-                    "score", "sample_count", "created_at", "metrics",
+                    "score", "sample_count", "created_at", "metrics", "module_confirmation_required",
                 )
             })
         return reports
@@ -467,6 +467,7 @@ class PublicBenchmarkService:
             "requested_llm_config": options,
             "knowledge_policy": "sample_only",
             "human_policy": human_policy,
+            "module_confirmation_required": False,
             "clarification_policy": clarification_policy,
             "max_steps": max_steps if execution == "agentic" else None,
             "split": split if suite == "storyseek_pipeline" else "not_applicable",
