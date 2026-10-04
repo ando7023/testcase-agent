@@ -481,9 +481,11 @@ function renderBenchmarkReport(report) {
     const readiness = {blocked: '存在阻塞', needs_preparation: '需补充执行条件', not_assessed: '未验收可执行性'};
     const gaps = [...(sample.clarification_items || []).map(g => ({kind: g.kind, text: g.question, reason: g.reason, ids: g.requirement_ids})),
       ...(sample.review_clarifications || []).map(g => ({kind: g.clarification_kind, text: g.message, reason: g.clarification_reason, ids: g.requirement_ids}))];
+    const audits = sample.clarification_scope_review || [];
+    const scopeAudit = audits.length ? `<details><summary>澄清范围复核（${audits.length} 项）</summary>${audits.map(a => `<p><b>${escapeHtml(a.clarification_id)}</b> · ${escapeHtml(gapLabels[a.original_kind] || a.original_kind)} → ${escapeHtml(gapLabels[a.kind] || a.kind)}<br>原判断：${escapeHtml(a.original_reason)}<br>复核依据：${escapeHtml(a.reason)}<br>引文：${escapeHtml(a.source_quote)}<br>证据：${escapeHtml((a.evidence_ids || []).join('、'))}</p>`).join('')}</details>` : '';
     const scope = sample.case_design_level ? `<small>设计层级：${sample.case_design_level === 'behavior' ? '行为级' : '面向执行'} · 执行准备：${escapeHtml(readiness[sample.execution_readiness] || '未评定')}</small>
       <details><summary>范围与执行准备（${gaps.length} 项）</summary>${gaps.map(g => `<p><b>${escapeHtml(gapLabels[g.kind] || '待分类')}</b> · ${escapeHtml((g.ids || []).join('、'))}<br>${escapeHtml(g.text)}<br>${escapeHtml(g.reason || '')}</p>`).join('') || '<p>未记录澄清项，不代表已完成环境与接口验收。</p>'}
-      <p>受阻需求：${escapeHtml((sample.blocked_requirement_ids || []).join('、') || '无记录')}<br>尚无用例关联的需求：${escapeHtml((sample.uncovered_requirement_ids || []).join('、') || '无记录')}</p></details>` : '';
+      <p>受阻需求：${escapeHtml((sample.blocked_requirement_ids || []).join('、') || '无记录')}<br>尚无用例关联的需求：${escapeHtml((sample.uncovered_requirement_ids || []).join('、') || '无记录')}</p></details>${scopeAudit}` : '';
     const evidence = sample.knowledge_scope === 'ebt_sample' ? `<small>知识范围：当前 EBT 样本证据（${(sample.knowledge_document_ids || []).length} 份），未写入全局 RAG</small>` : '';
     return `<div class="benchmark-sample"><strong>${escapeHtml(sample.id)}</strong><span>${escapeHtml(sample.status)} · ${escapeHtml(outcomes)}</span>${evidence}${scope}${sample.question ? `<small>${escapeHtml(sample.question)}</small>` : ''}${sample.error || sample.error_code ? `<small>${escapeHtml(sample.error || sample.error_code)}</small>` : ''}${sample.run_id ? `<small>运行 ${escapeHtml(sample.run_id)} · ${sample.steps} 步 · ${escapeHtml(sample.run_status)}</small>` : ''}${timing ? `<small>${escapeHtml(timing)}</small>` : ''}</div>`;
   }).join('');

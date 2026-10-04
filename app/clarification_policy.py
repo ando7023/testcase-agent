@@ -42,8 +42,8 @@ Only behavior_blocker gaps (contradictions or ambiguity that changes the expecte
 Explain the affected requirement/scenario and why its outcome cannot be decided. Preserve unresolved blockers;
 independent supported cases may be designed, but do not claim the blocked requirements were covered or finished.
 Do not require functional/boundary/exception cases universally. Choose types only when supported by the input.
-'Only registered subscribers may establish traces' is a necessary condition: an unregistered subscriber must not
-establish a trace. It does NOT promise every registered subscriber succeeds; cancelled/expired is not unregistered.
+An 'only eligible actors may perform an action' rule is a necessary condition: ineligible actors cannot perform it.
+It does NOT promise every eligible actor succeeds. Generic policy examples are not input domain facts.
 For analysis: populate clarification_items with id, kind (execution_detail|out_of_scope|behavior_blocker), question,
 requirement_ids, affected_scenarios, source_quote copied from raw input, and reason. Use an empty list if none.
 For new analysis, each ambiguities entry is {id, question}. Link it through clarification_items.ambiguity_ids.
@@ -67,8 +67,19 @@ def policy_system(system, context):
                        "For each atomic requirement or clarification, source_quote must be an exact substring of "
                        "the original requirement OR of a supplied evidence content value. When using the latter, "
                        "cite its document ID in evidence_ids. Record retrieved_evidence_ids as well. "
-                       "Linked tests are reference examples, not exhaustive requirements: do not infer every registered "
-                       "subscriber succeeds, or invent failure paths/fields from missing details. "
+                       "Keep atomic requirement IDs distinct from supplied document IDs: requirement_ids references "
+                       "atomic_requirements[].id, evidence_ids references the supplied document IDs. "
+                       "Linked tests are reference examples with their own preconditions and postconditions, not "
+                       "exhaustive requirements or a universal success guarantee. Their documented postconditions "
+                       "are usable behavior-level oracles within their documented preconditions. "
+                       "Do not turn the negation of an example precondition into a mandatory failure scenario: "
+                       "an unavailable prerequisite is outside the reference example unless the original input "
+                       "explicitly requires that scenario. Missing outcomes for such unrequested scenarios are "
+                       "out_of_scope suggestions, not behavior_blockers. Do not ask for a second requirements "
+                       "document to restate a supplied example's explicit outcome. Undefined concrete fixtures, "
+                       "interfaces or internal meaning are execution_detail when that observable outcome is known. "
+                       "If the original input explicitly requires an outcome that remains ambiguous or contradictory, "
+                       "preserve it as a behavior_blocker. Do not invent failure paths or fields. "
                        "The quoted source and its ID remain required in corrections. This is a reference-assisted "
                        "evaluation, not a hidden-answer generation benchmark.\nSupplied input evidence:\n" +
                        json.dumps(context["input_evidence"], ensure_ascii=False))
@@ -160,6 +171,7 @@ def scope_summary(project):
         "case_design_level": "behavior" if project.clarification_policy == "evidence_only" else "execution_oriented",
         "execution_readiness": "blocked" if blockers else "needs_preparation" if any(g.kind == "execution_detail" for g in gaps) else "not_assessed",
         "clarification_items": [g.model_dump() for g in gaps],
+        "clarification_scope_review": [r.model_dump() for r in project.analysis.clarification_scope_review] if project.analysis else [],
         "blocked_requirement_ids": sorted({rid for g in blockers for rid in g.requirement_ids}),
         "uncovered_requirement_ids": [r.id for r in project.analysis.atomic_requirements if r.id not in covered] if project.analysis else [],
     }

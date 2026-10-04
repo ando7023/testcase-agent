@@ -99,6 +99,16 @@ class ClarificationItem(BaseModel):
     evidence_ids: List[str] = Field(default_factory=list)
 
 
+class ClarificationScopeReview(BaseModel):
+    clarification_id: str
+    original_kind: str
+    original_reason: str
+    kind: Literal["execution_detail", "out_of_scope", "behavior_blocker"]
+    reason: str
+    source_quote: str
+    evidence_ids: List[str] = Field(default_factory=list)
+
+
 class RequirementAnalysis(BaseModel):
     summary: str
     actors: List[str] = Field(default_factory=list)
@@ -107,6 +117,7 @@ class RequirementAnalysis(BaseModel):
     constraints: List[str] = Field(default_factory=list)
     ambiguities: List[Union[str, RequirementAmbiguity]] = Field(default_factory=list)
     clarification_items: List[ClarificationItem] = Field(default_factory=list)
+    clarification_scope_review: List[ClarificationScopeReview] = Field(default_factory=list)
     atomic_requirements: List[AtomicRequirement] = Field(default_factory=list)
     risk_hints: List[str] = Field(default_factory=list)
     ticket_types: List[str] = Field(default_factory=list)

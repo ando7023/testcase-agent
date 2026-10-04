@@ -39,4 +39,12 @@ assert.match(resultNode.innerHTML, /证据范围校验/);
 assert.match(resultNode.innerHTML, /invalid_scope/);
 assert.match(resultNode.innerHTML, /&lt;script&gt;/);
 assert.doesNotMatch(resultNode.innerHTML, /<script>/);
+sandbox.renderBenchmarkReport({schema_version: 2, mode: 'live', samples: [{id: '104',
+  case_design_level: 'behavior', clarification_scope_review: [{clarification_id: 'G1',
+    original_kind: 'behavior_blocker', kind: 'out_of_scope', original_reason: '<script>old</script>',
+    reason: 'Outside the documented fixture', source_quote: '<img src=x onerror=alert(1)>', evidence_ids: ['DOC-1']}]}]});
+assert.match(resultNode.innerHTML, /澄清范围复核/);
+assert.match(resultNode.innerHTML, /阻塞预期判断 → 原文范围之外/);
+assert.match(resultNode.innerHTML, /Outside the documented fixture/);
+assert.doesNotMatch(resultNode.innerHTML, /<script>|<img /);
 console.log('Benchmark SSE framing, UTF-8 fragmentation and preview checks passed.');

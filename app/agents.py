@@ -353,7 +353,6 @@ Return JSON only."""
                         validate_analysis(analysis, payload.content, context.get("input_evidence"))
                         if not {a["id"] for a in required_ambiguities} <= {a["id"] for a in ambiguity_records(analysis)}:
                             raise LLMError("Correction dropped unresolved ambiguity IDs", code="invalid_scope")
-                    return analysis
                 except ValidationError as exc:
                     # Do not put provider data or Pydantic input values into feedback.
                     failure = LLMError("Requirement analysis does not match its schema", code="invalid_schema")
@@ -365,6 +364,9 @@ Return JSON only."""
                     failure = exc
                     feedback = ("Return exactly one JSON object, without trailing text or additional objects."
                                 if exc.code == "invalid_json" else str(exc))
+                else:
+                    from .requirement_scope import review_behavior_scope
+                    return review_behavior_scope(self.llm, analysis, payload.content, context)
                 if attempt:
                     raise failure
                 if analysis is not None and context.get("clarification_policy") == "evidence_only":

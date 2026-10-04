@@ -7,7 +7,7 @@ from unittest.mock import Mock, patch
 
 from app.agents import CaseReviewAgent, RequirementUnderstandingAgent
 from app.benchmark_execution import BenchmarkExecution
-from app.clarification_policy import validate_analysis
+from app.clarification_policy import validate_analysis, policy_system
 from app.llm import LLMError
 from app.models import (AtomicRequirement, ClarificationItem, ModuleReviewFinding, ModuleReviewReport,
                         ModuleTree, RequirementAnalysis, RequirementInput, ReviewFinding, ReviewReport,
@@ -244,6 +244,25 @@ class ClarificationPolicyTests(unittest.TestCase):
         self.assertIn("necessary condition", generate.call_args[0][0])
         agent.run(RequirementInput(title="Trace", content=RAW), {})
         self.assertNotIn("evidence_only", generate.call_args[0][0])
+
+    def test_shared_policy_does_not_supply_trace_domain_facts_to_other_samples(self):
+        system = policy_system("Analyze registration", {"clarification_policy": "evidence_only"})
+        self.assertIn("necessary condition", system)
+        self.assertNotIn("subscribers", system)
+        self.assertNotIn("establish traces", system)
+
+    def test_reference_scope_rules_reach_research_and_preserve_real_blockers(self):
+        context = {"clarification_policy": "evidence_only", "input_evidence": {
+            "EBT-SAMPLE-TEST-143": {"content": "At least one manager exists. The subscriber is registered."}}}
+        # All policy consumers, including research and Supervisor, receive the
+        # same rule; no keyword heuristic silently reclassifies a saved gap.
+        for prompt in ["Research the supplied material", "Plan the next action", "Review cases"]:
+            system = policy_system(prompt, context)
+            self.assertIn("negation of an example precondition", system)
+            self.assertIn("out_of_scope suggestions, not behavior_blockers", system)
+            self.assertIn("preserve it as a behavior_blocker", system)
+            self.assertIn(context["input_evidence"]["EBT-SAMPLE-TEST-143"]["content"], system)
+        self.assertEqual(policy_system("Strict task", {**context, "clarification_policy": "strict"}), "Strict task")
 
     def test_api_forwards_policy_on_both_transports_and_rejects_unknown_policy(self):
         from fastapi.testclient import TestClient
