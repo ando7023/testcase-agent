@@ -126,6 +126,7 @@ class SupervisorTest(unittest.TestCase):
         self.assertEqual(run.repair_rounds, 2)
         self.assertEqual(len(planner.inputs), 5)
         self.assertIn("两轮", run.question)
+        self.assertIn("不代表缺少业务依据", run.question)
         self.assertEqual(next(iter(run.issue_ledger.values()))["seen_reviews"], 3)
         self.assertEqual(self.store.get_agent_run(self.project.id, run.id).repair_rounds, 2)
 
@@ -139,6 +140,8 @@ class SupervisorTest(unittest.TestCase):
             run, _ = self.run_script([invoke("quality_critic"), invoke("case_revision", skills=["boundary"]), invoke("quality_critic")])
         self.assertEqual(run.status, "waiting_input")
         self.assertIn("未变化", run.question)
+        self.assertIn("请检查修复产物", run.question)
+        self.assertNotIn("请补充以下问题的业务依据", run.question)
 
     def test_explicit_budget_extension_preserves_run_and_guards(self):
         self.prepared(cases=True)

@@ -399,7 +399,9 @@ class AgenticSupervisor:
                             run.status = "waiting_input"
                             reason = ("评审需要补充契约或依据" if clarification else
                                       "修复后产物未变化" if unchanged else "两轮修复后仍存在阻塞问题")
-                            run.question = reason + "。请补充以下问题的业务依据或人工裁定，不要仅追加预算：\n" + "\n".join(
+                            guidance = ("请补充以下问题的业务依据或人工裁定，不要仅追加预算：" if clarification else
+                                        "以下是尚未修好的用例问题，请检查修复产物或人工调整用例；不代表缺少业务依据，也不要仅追加预算：")
+                            run.question = reason + "。" + guidance + "\n" + "\n".join(
                                 "{}: {}".format(f.case_id or f.category, f.message) for f in blockers[:3])
                             observation["convergence_stop"] = reason
                     elif decision.capability in {"case_generation", "case_revision"}:

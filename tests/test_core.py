@@ -491,7 +491,7 @@ class PipelineTest(unittest.TestCase):
         revised_ids = {item["id"] for item in result["cases"]}
         self.assertTrue(previous_ids <= revised_ids)
         self.assertEqual(trace.status, "fallback_success")
-        self.assertIn("dropped existing cases", trace.error)
+        self.assertIn("case identity, module or step protection", trace.error)
 
 
     def test_hybrid_rag_exposes_stage_scores_and_trace(self):

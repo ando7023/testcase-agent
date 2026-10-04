@@ -8,13 +8,18 @@ from .clarification_policy import behavior_blockers, scope_summary
 
 def run_failure_details(run):
     """Expose safe failure metadata even when Supervisor handled the exception."""
-    if not run or run.status != "failed":
+    if not run:
         return {}
     step = next((step for step in reversed(run.steps) if step.status == "error"), None)
     observation = step.observation if step else {}
+    # A handled incomplete review pauses for a technical retry; its waiting
+    # status must not hide the known schema/transport failure in reports.
+    if run.status != "failed" and not (step and step is run.steps[-1] and observation.get("convergence_stop") == "review_failed"):
+        return {}
     messages = {
         "invalid_scope": "需求证据校验未通过，请检查原文引文及本次样本证据 ID。",
         "invalid_schema": "模型产物不符合结构约定，修正后仍未通过校验。",
+        "revision_unchanged": "修复未产生有效变化，反馈重试后仍未生效；请检查修复产物，无需补充业务契约。",
         "invalid_json": "模型响应不是有效 JSON，格式修正后仍未通过。",
         "timeout": "模型请求超时，请查看接收阶段诊断。",
         "output_limit": "模型输出达到长度限制，未返回完整产物。",
@@ -33,6 +38,8 @@ def run_failure_details(run):
                "failure_agent": (decision.capability or "worker") if decision else "supervisor"}
     if code in {"invalid_scope", "invalid_schema"}:
         details["failure_phase"] = "scope_validation" if code == "invalid_scope" else "schema_validation"
+    elif code == "revision_unchanged":
+        details["failure_phase"] = "repair_validation"
     return details
 
 

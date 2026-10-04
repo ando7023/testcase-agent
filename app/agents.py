@@ -1714,6 +1714,7 @@ class CaseRevisionAgent(Agent):
 
     SYSTEM = """You are a senior test case repair agent. You receive generated cases plus independent review findings.
 Fix every fixable finding: add missing case types, cover modules and requirements without cases, and complete missing assertions.
+Grouping modules inherit coverage from cases in descendant modules; do not add redundant parent cases solely for direct assignment.
 Repair semantic findings on the identified cases, including preconditions, actions, test data and expected results.
 Use canonical English case_type labels: functional, boundary, exception, permission, state_transition.
 Keep each existing case's ID, module, requirement mappings and human status; do not delete existing cases.
@@ -1739,28 +1740,50 @@ Return a JSON object with a cases array containing the FULL corrected case set."
                 "properties": {"cases": {"type": "array", "items": TestCase.model_json_schema()}},
                 "required": ["cases"],
             }
-            result = self.llm.generate_json(
-                policy_system(self.SYSTEM, context),
-                "Analysis:\n{}\nModule tree:\n{}\nCurrent cases:\n{}\nReview findings to fix:\n{}\nKnowledge:\n{}".format(
+            user_prompt = "Analysis:\n{}\nModule tree:\n{}\nCurrent cases:\n{}\nReview findings to fix:\n{}\nKnowledge:\n{}".format(
                     analysis.model_dump_json(),
                     tree.model_dump_json(),
                     json.dumps([case.model_dump() for case in cases], ensure_ascii=False),
                     json.dumps([item.model_dump() for item in fixable], ensure_ascii=False),
                     context.get("knowledge", ""),
-                ),
-                case_schema,
-            )
-            raw_cases = result.get("cases")
-            if not isinstance(raw_cases, list):
-                raise LLMError("Revision output must contain a cases array")
-            try:
-                revised = [TestCase.model_validate(item) for item in raw_cases]
-            except (TypeError, ValueError) as exc:
-                raise LLMError("Revision output contains invalid cases: {}".format(exc)) from exc
-            protected = self._protect_existing_cases(cases, revised, fixable, tree)
-            previous_ids = {case.id for case in cases}
-            added = [case.id for case in protected if case.id not in previous_ids]
-            return {"cases": [case.model_dump() for case in protected], "added_case_ids": added}
+                )
+            feedback = ""
+            for attempt in range(2):
+                system = policy_system(self.SYSTEM, context)
+                if attempt:
+                    system += ("\nThe previous revision failed validation: " + feedback +
+                               " Regenerate the FULL corrected case set from the same input. "
+                               "Each step needs action and expected. Preserve existing IDs, modules, "
+                               "mappings and human status. Do not invent missing business contracts.")
+                try:
+                    result = self.llm.generate_json(system, user_prompt, case_schema)
+                    raw_cases = result.get("cases") if isinstance(result, dict) else None
+                    if not isinstance(raw_cases, list):
+                        raise LLMError("cases must be an array", code="invalid_schema")
+                    revised = []
+                    for index, item in enumerate(raw_cases):
+                        try:
+                            revised.append(TestCase.model_validate(item))
+                        except ValidationError as exc:
+                            paths = ["cases[{}].{} ({})".format(index, ".".join(map(str, e["loc"])), e["type"])
+                                     for e in exc.errors()[:8]]
+                            raise LLMError("; ".join(paths), code="invalid_schema") from exc
+                    try:
+                        protected = self._protect_existing_cases(cases, revised, fixable, tree)
+                    except LLMError as exc:
+                        raise LLMError("Revision violated existing case identity, module or step protection", code="invalid_schema") from exc
+                    # Merely marking a case pending is not an effective repair.
+                    before = [c.model_dump(exclude={"review_status"}) for c in cases]
+                    after = [c.model_dump(exclude={"review_status"}) for c in protected]
+                    if before == after:
+                        raise LLMError("Revision made no accepted change to the cases", code="revision_unchanged")
+                    previous_ids = {case.id for case in cases}
+                    added = [case.id for case in protected if case.id not in previous_ids]
+                    return {"cases": [case.model_dump() for case in protected], "added_case_ids": added}
+                except LLMError as exc:
+                    if attempt or exc.code not in {"invalid_json", "invalid_schema", "revision_unchanged"}:
+                        raise
+                    feedback = "Return a single valid JSON object" if exc.code == "invalid_json" else str(exc)
         return self._demo(analysis, tree, cases, fixable, context.get("selected_skills"))
 
     @staticmethod

@@ -386,6 +386,7 @@ const benchmarkLabels = {
   supervisor_decision: '编排决策',
   scope_validation: '证据范围校验',
   schema_validation: '产物结构校验',
+  repair_validation: '修复生效校验',
   requirement_understanding: '需求理解',
   module_planning: '模块规划',
   case_generation: '用例生成',
