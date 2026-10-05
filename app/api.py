@@ -100,6 +100,11 @@ def agent_capabilities():
     return [asdict(item) for item in CAPABILITIES.values()]
 
 
+@app.get("/api/skills")
+def skill_catalog():
+    return {"skills": orchestrator.skills.catalog(), "errors": orchestrator.skills.errors}
+
+
 @app.post("/api/projects/{project_id}/agent-runs")
 def start_agent_run(project_id: str, payload: AgentRunCreate):
     require_project(project_id)

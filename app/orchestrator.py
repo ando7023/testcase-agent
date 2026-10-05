@@ -47,6 +47,7 @@ from .models import (
 )
 from .retrieval_evaluation import RETRIEVAL_DATASETS, RetrievalEvaluationAgent
 from .skills import select_skills, resolve_skills
+from .skill_runtime import SkillRegistry
 from .store import JsonStore
 from .tooling import ReActRuntime, ToolRegistry
 from .template_evolution import (
@@ -86,6 +87,7 @@ class TestCaseOrchestrator:
         self.benchmark_evidence: List[KnowledgeDocument] = []
         self.clarification_policy = "strict"
         self.store = store
+        self.skills = SkillRegistry()
         self.tracer = TraceManager(store.root)
         self.store.set_tracer(self.tracer)
         self.llm = OpenAICompatibleClient(self.tracer)
