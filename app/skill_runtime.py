@@ -21,8 +21,8 @@ class SkillRegistry:
     MAX_TEXT = 24000
 
     def __init__(self, root=None):
-        self.root = Path(root or os.getenv("CASEFORGE_SKILLS_DIR") or
-                         Path(__file__).resolve().parents[1] / "skills" / "testcase").resolve()
+        configured = root or os.getenv("CASEFORGE_SKILLS_DIR") or Path(__file__).resolve().parents[1] / "skills" / "testcase"
+        self.root = Path(os.path.abspath(str(configured))).resolve()
         self.entries = {}
         self.errors = []
         for name, skill in SKILLS.items():
@@ -68,15 +68,16 @@ class SkillRegistry:
         with path.open(encoding="utf-8") as handle:
             if handle.readline(self.MAX_HEADER + 1).strip() != "---":
                 raise SkillError("skill_frontmatter_required")
-            for line in handle:
+            while True:
+                line = handle.readline(self.MAX_HEADER + 1)
+                if not line:
+                    raise SkillError("skill_frontmatter_required")
                 size += len(line.encode("utf-8"))
                 if size > self.MAX_HEADER:
                     raise SkillError("skill_header_too_large")
                 if line.strip() == "---":
                     break
                 lines.append(line)
-            else:
-                raise SkillError("skill_frontmatter_required")
         data = yaml.safe_load("".join(lines))
         if not isinstance(data, dict):
             raise SkillError("invalid_skill_metadata")
@@ -88,11 +89,14 @@ class SkillRegistry:
         meta = data.get("metadata") or {}
         if not isinstance(meta, dict):
             raise SkillError("invalid_skill_metadata")
+        legacy_id = meta.get("legacy_id")
+        if legacy_id is not None and (not isinstance(legacy_id, str) or legacy_id not in SKILLS or name != legacy_id.replace("_", "-")):
+            raise SkillError("invalid_skill_legacy_alias")
         for key in ("case_types", "triggers"):
             value = meta.get(key, [])
             if not isinstance(value, list) or any(not isinstance(v, str) for v in value):
                 raise SkillError("invalid_skill_metadata")
-        return {"id": name, "name": name, "description": description.strip(),
+        return {"id": legacy_id or name, "name": name, "description": description.strip(),
                 "path": folder + "/SKILL.md", "folder": folder, "source": "package",
                 "case_types": meta.get("case_types", []), "triggers": meta.get("triggers", [])}
 
@@ -128,7 +132,9 @@ class SkillRegistry:
         if self._metadata(entry["folder"])["id"] != name:
             raise SkillError("skill_metadata_changed_restart_required")
         text, digest = self._text(self._path(entry["folder"], "SKILL.md"))
-        body = text.split("---", 2)[-1].strip()
+        lines = text.splitlines(keepends=True)
+        end = next(i for i in range(1, len(lines)) if lines[i].strip() == "---")
+        body = "".join(lines[end + 1:]).strip()
         if not body:
             raise SkillError("empty_skill_body")
         resources = []
@@ -140,7 +146,47 @@ class SkillRegistry:
                         relative = path.relative_to(self.root / entry["folder"]).as_posix()
                         self._path(entry["folder"], relative)
                         resources.append(relative)
-        return dict(entry, instruction=body, version=digest, resources=resources[:64], scripts={})
+        scripts = {}
+        manifest = self._path(entry["folder"], "runtime.json")
+        if manifest.exists():
+            from .skill_scripts import check_schema
+            manifest_text, manifest_digest = self._text(manifest)
+            try:
+                definitions = json.loads(manifest_text)
+            except ValueError:
+                raise SkillError("invalid_skill_manifest")
+            if not isinstance(definitions, dict) or set(definitions) != {"scripts"} or not isinstance(definitions["scripts"], dict):
+                raise SkillError("invalid_skill_manifest")
+            for key, spec in definitions["scripts"].items():
+                if not re.fullmatch(r"[a-z0-9][a-z0-9_-]{0,63}", key) or not isinstance(spec, dict):
+                    raise SkillError("invalid_skill_manifest")
+                if set(spec) != {"path", "description", "input_source", "parameters", "output_schema", "timeout_seconds"}:
+                    raise SkillError("invalid_skill_manifest")
+                if not isinstance(spec["path"], str) or not spec["path"].startswith("scripts/") or not spec["path"].endswith(".py"):
+                    raise SkillError("invalid_skill_script_path")
+                self._path(entry["folder"], spec["path"])
+                if not isinstance(spec["input_source"], str) or spec["input_source"] not in {"analysis", "modules", "cases"}:
+                    raise SkillError("invalid_skill_input_source")
+                if not isinstance(spec["description"], str) or not 1 <= len(spec["description"]) <= 1000:
+                    raise SkillError("invalid_skill_script_description")
+                if type(spec["timeout_seconds"]) is not int or not 1 <= spec["timeout_seconds"] <= 30:
+                    raise SkillError("invalid_skill_script_timeout")
+                for field in ("parameters", "output_schema"):
+                    check_schema(spec[field])
+                    if spec[field].get("type") != "object":
+                        raise SkillError("script_schema_must_be_object")
+                if spec["parameters"].get("additionalProperties") is not False:
+                    raise SkillError("script_parameters_must_reject_unknown_fields")
+                script_path = self._path(entry["folder"], spec["path"])
+                with script_path.open("rb") as handle:
+                    script_bytes = handle.read(self.MAX_TEXT + 1)
+                if len(script_bytes) > self.MAX_TEXT:
+                    raise SkillError("skill_script_too_large")
+                script_version = hashlib.sha256(script_bytes).hexdigest()
+                scripts[key] = dict(spec, version=script_version)
+                digest = hashlib.sha256((digest + script_version).encode()).hexdigest()
+            digest = hashlib.sha256((digest + manifest_digest).encode()).hexdigest()
+        return dict(entry, instruction=body, version=digest, resources=resources[:64], scripts=scripts)
 
     def read_resource(self, name, relative):
         entry = self.require([name])[0]

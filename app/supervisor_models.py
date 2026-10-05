@@ -18,6 +18,10 @@ class SupervisorDecision(BaseModel):
     instruction: str = Field(default="", max_length=4000)
     target_module_id: str = Field(default="", max_length=120)
     question: str = Field(default="", max_length=2000)
+    skill_id: str = Field(default="", max_length=64)
+    resource_path: str = Field(default="", max_length=240)
+    script_id: str = Field(default="", max_length=64)
+    script_arguments: Dict[str, Any] = Field(default_factory=dict)
 
 
 class SupervisorStep(BaseModel):
@@ -50,5 +54,8 @@ class SupervisorRun(BaseModel):
     issue_ledger: Dict[str, Dict[str, Any]] = Field(default_factory=dict)
     review_history: List[Dict[str, Any]] = Field(default_factory=list)
     repair_rounds: int = 0
+    loaded_skills: Dict[str, Dict[str, Any]] = Field(default_factory=dict)
+    skill_resources: Dict[str, Dict[str, Any]] = Field(default_factory=dict)
+    skill_script_results: List[Dict[str, Any]] = Field(default_factory=list)
     created_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
     updated_at: str = Field(default_factory=utc_now_iso)

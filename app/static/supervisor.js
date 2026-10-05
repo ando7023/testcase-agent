@@ -1,6 +1,6 @@
 (() => {
   const labels = {running: '执行中', waiting_input: '等待补充信息', waiting_confirmation: '等待模块确认', completed: '已完成', budget_exhausted: '步数用尽', failed: '执行失败', needs_attention: '降级产物待核验'};
-  const names = {requirement_understanding: '需求理解', module_planning: '模块规划', case_generation: '用例生成', quality_critic: '独立评审', case_revision: '单轮修复', inspect_materials: '检查输入物料', search_knowledge: '检索知识', request_input: '等待人工输入', finish: '完成检查'};
+  const names = {requirement_understanding: '需求理解', module_planning: '模块规划', case_generation: '用例生成', quality_critic: '独立评审', case_revision: '单轮修复', inspect_materials: '检查输入物料', search_knowledge: '检索知识', load_skill: '加载 Skill', read_skill_resource: '读取 Skill 资料', run_skill_script: '执行 Skill 脚本', request_input: '等待人工输入', finish: '完成检查'};
   let runs = [], selected = null, projectId = '', revision = 0;
   function render() {
     const run = selected;

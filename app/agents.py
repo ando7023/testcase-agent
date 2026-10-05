@@ -971,7 +971,7 @@ references such as "the previous case" or "that module". Return a JSON object wi
                 "properties": {"cases": {"type": "array", "items": TestCase.model_json_schema()}},
                 "required": ["cases"],
             }
-            selected = resolve_skills(json.dumps(payload, ensure_ascii=False), context.get("selected_skills"))
+            selected = resolve_skills(json.dumps(payload, ensure_ascii=False), context.get("loaded_test_skills", context.get("selected_skills")))
             prompt = """Operation mode: {mode}
 User instruction: {instruction}
 Target module ID: {target}
@@ -1027,7 +1027,7 @@ Keep stable IDs for unchanged cases and never invent a module ID.""".format(
                 )
             return [TestCase.model_validate(item) for item in result.get("cases", [])]
         return self._demo_operation(
-            analysis, tree, mode, instruction, target_module_id, existing, context.get("selected_skills")
+            analysis, tree, mode, instruction, target_module_id, existing, context.get("loaded_test_skills", context.get("selected_skills"))
         )
 
     def _demo_operation(
@@ -1803,7 +1803,7 @@ Return a JSON object with a cases array containing the FULL corrected case set."
                     if attempt or exc.code not in {"invalid_json", "invalid_schema", "revision_unchanged"}:
                         raise
                     feedback = "Return a single valid JSON object" if exc.code == "invalid_json" else str(exc)
-        return self._demo(analysis, tree, cases, fixable, context.get("selected_skills"))
+        return self._demo(analysis, tree, cases, fixable, context.get("loaded_test_skills", context.get("selected_skills")))
 
     @staticmethod
     def _protect_existing_cases(

@@ -88,6 +88,8 @@ def resolve_skills(text: str, names=None) -> List[TestSkill]:
     """None preserves legacy selection; an explicit list is authoritative."""
     if names is None:
         return select_skills(text)
+    if names and all(isinstance(item, TestSkill) for item in names):
+        return list({item.name: item for item in names}.values())
     unknown = set(names) - SKILLS.keys()
     if unknown:
         raise ValueError("Unknown skills: {}".format(sorted(unknown)))
